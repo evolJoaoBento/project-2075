@@ -39,6 +39,7 @@ export class D20Dice {
     public onRollComplete: ((result: number | string) => void) | null = null;
     private ambientLight: THREE.AmbientLight | null = null;
     private directionalLight: THREE.DirectionalLight | null = null;
+    public isViewActive: boolean = true; // Track if the view is active
 
     constructor(container: HTMLElement, settings: DiceSettings) {
         this.container = container;
@@ -704,68 +705,51 @@ export class D20Dice {
         const rows = 2;
         const cellWidth = 1.0 / cols;
         const cellHeight = 1.0 / rows;
-        const padding = 0.02;
 
         // TetrahedronGeometry has 4 triangular faces
         for (let faceIndex = 0; faceIndex < 4; faceIndex++) {
             const col = faceIndex % cols;
             const row = Math.floor(faceIndex / cols);
 
-            const cellLeft = col * cellWidth + padding;
-            const cellRight = (col + 1) * cellWidth - padding;
-            const cellTop = row * cellHeight + padding;
-            const cellBottom = (row + 1) * cellHeight - padding;
+            // Equilateral triangles that use full grid cell width
+            const cellLeft = col * cellWidth;
+            const cellRight = (col + 1) * cellWidth;
+            const cellTop = row * cellHeight;
+            const cellBottom = (row + 1) * cellHeight;
 
             const cellCenterX = (cellLeft + cellRight) / 2;
             const cellCenterY = (cellTop + cellBottom) / 2;
-            const cellW = cellRight - cellLeft;
-            const cellH = cellBottom - cellTop;
 
-            // Create equilateral triangle that fits within the cell
-            const triangleHeight = Math.min(cellH, cellW * Math.sqrt(3) / 2);
-            const triangleWidth = triangleHeight * 2 / Math.sqrt(3);
+            // Equilateral triangle with base = full cell width
+            const triangleBase = cellWidth;
+            const triangleHeight = triangleBase * Math.sqrt(3) / 2; // Height of equilateral triangle
 
-            // All triangles point up for consistency
-            const v1 = {
-                x: cellCenterX,
-                y: cellTop + (cellH - triangleHeight) / 2
-            };
-
-            const v2 = {
-                x: cellCenterX - triangleWidth / 2,
-                y: cellTop + (cellH - triangleHeight) / 2 + triangleHeight
-            };
-
-            const v3 = {
-                x: cellCenterX + triangleWidth / 2,
-                y: cellTop + (cellH - triangleHeight) / 2 + triangleHeight
-            };
-
-            // Ensure triangles don't exceed cell boundaries
-            const vertices = [v1, v2, v3];
-            vertices.forEach(v => {
-                v.x = Math.max(cellLeft, Math.min(cellRight, v.x));
-                v.y = Math.max(cellTop, Math.min(cellBottom, v.y));
-            });
+            // Center the triangle vertically in the cell
+            const topX = cellCenterX;
+            const topY = cellCenterY - triangleHeight / 2;
+            const leftX = cellLeft;
+            const leftY = cellCenterY + triangleHeight / 2;
+            const rightX = cellRight;
+            const rightY = cellCenterY + triangleHeight / 2;
 
             // Set UV coordinates for the three vertices of this face
             const vertexOffset = faceIndex * 3;
 
-            // First vertex UVs
-            uvArray[(vertexOffset * 2)] = v1.x;
-            uvArray[(vertexOffset * 2) + 1] = v1.y;
+            // First vertex UVs (top vertex)
+            uvArray[(vertexOffset * 2)] = topX;
+            uvArray[(vertexOffset * 2) + 1] = topY;
 
-            // Second vertex UVs
-            uvArray[(vertexOffset * 2) + 2] = v2.x;
-            uvArray[(vertexOffset * 2) + 3] = v2.y;
+            // Second vertex UVs (left vertex)
+            uvArray[(vertexOffset * 2) + 2] = leftX;
+            uvArray[(vertexOffset * 2) + 3] = leftY;
 
-            // Third vertex UVs
-            uvArray[(vertexOffset * 2) + 4] = v3.x;
-            uvArray[(vertexOffset * 2) + 5] = v3.y;
+            // Third vertex UVs (right vertex)
+            uvArray[(vertexOffset * 2) + 4] = rightX;
+            uvArray[(vertexOffset * 2) + 5] = rightY;
         }
 
         uvAttribute.needsUpdate = true;
-        console.log('Applied tetrahedron UV mapping for D4 with 2x2 grid');
+        console.log('Applied simple tetrahedron UV mapping for D4 with full grid cells');
     }
 
     private applySquareUVMapping(geometry: THREE.BufferGeometry): void {
@@ -1258,7 +1242,7 @@ export class D20Dice {
     }
 
     private checkSingleDiceSettling(diceIndex: number): void {
-        if (!this.isRolling || diceIndex < 0 || diceIndex >= this.diceBodyArray.length) return;
+        if (!this.isViewActive || !this.isRolling || diceIndex < 0 || diceIndex >= this.diceBodyArray.length) return;
 
         const body = this.diceBodyArray[diceIndex];
         const motionThreshold = this.settings.motionThreshold;
@@ -1288,21 +1272,36 @@ export class D20Dice {
         }
 
         const diceType = this.diceTypeArray[diceIndex];
-        const result = this.getTopFaceNumberForDice(diceIndex);
-        const formattedResult = `1${diceType}(${result}) = ${result}`;
 
-        console.log(`📊 Single dice roll result: ${formattedResult}`);
+        // Wait 2 seconds before checking result to match multi-dice behavior
+        setTimeout(() => {
+            // Check if dice can be properly detected
+            const checkResult = this.checkDiceResult(diceIndex);
 
-        this.isRolling = false;
+            let formattedResult: string;
 
-        // Trigger the onRollComplete callback with formatted result
-        if (this.onRollComplete) {
-            this.onRollComplete(formattedResult);
-        }
+            if (checkResult.isCaught) {
+                // Dice is caught - highlight it and show in result
+                this.highlightCaughtDice(diceIndex, true);
+                formattedResult = `1${diceType}(CAUGHT) = CAUGHT - Face confidence: ${checkResult.confidence.toFixed(3)}, required: ${checkResult.requiredConfidence.toFixed(3)}`;
+                console.log(`🥅 Single dice ${diceIndex} (${diceType}) CAUGHT! Face confidence: ${checkResult.confidence.toFixed(3)}, required: ${checkResult.requiredConfidence.toFixed(3)}`);
+            } else {
+                // Valid result
+                formattedResult = `1${diceType}(${checkResult.result}) = ${checkResult.result}`;
+                console.log(`📊 Single dice roll result: ${formattedResult}`);
+            }
+
+            this.isRolling = false;
+
+            // Trigger the onRollComplete callback with formatted result
+            if (this.onRollComplete) {
+                this.onRollComplete(formattedResult);
+            }
+        }, 2000);
     }
 
     private checkMultiDiceSettling(): void {
-        if (!this.isRolling) return;
+        if (!this.isViewActive || !this.isRolling) return;
 
         // Check if all dice have settled
         let allSettled = true;
@@ -1395,22 +1394,19 @@ export class D20Dice {
         this.completeMultiRoll();
     }
 
-    private getTopFaceNumberForDice(diceIndex: number): number {
+    // Check if dice can be determined, or if it's caught
+    private checkDiceResult(diceIndex: number): { isCaught: boolean; result: number | null; confidence: number; requiredConfidence: number } {
         const diceType = this.diceTypeArray[diceIndex];
         const diceMesh = this.diceArray[diceIndex];
-        const diceBody = this.diceBodyArray[diceIndex];
 
-        if (!diceMesh || !diceBody) {
-            console.warn(`Missing mesh or body for dice ${diceIndex}`);
-            return this.getRandomResultForDiceType(diceType);
+        if (!diceMesh) {
+            return { isCaught: false, result: this.getRandomResultForDiceType(diceType), confidence: 0, requiredConfidence: 0 };
         }
 
         // Get face normals for this dice type
         const faceNormals = this.getFaceNormalsForDiceType(diceType);
 
         // Detection vector based on dice type
-        // D4 uses down vector since the result is on the bottom
-        // All other dice use up vector since the result is on top
         const detectionVector = diceType === 'd4'
             ? new THREE.Vector3(0, -1, 0)  // Down vector for D4
             : new THREE.Vector3(0, 1, 0);   // Up vector for others
@@ -1433,22 +1429,102 @@ export class D20Dice {
             }
         }
 
-        // Convert face index to actual face number based on dice type
-        const result = this.mapFaceIndexToNumber(bestFaceIndex, diceType);
-        console.log(`🎯 Dice ${diceIndex} (${diceType}) face detection: face index ${bestFaceIndex} = ${result}, confidence: ${bestDotProduct.toFixed(3)}`);
-        return result;
+        // Check if the best face meets the confidence threshold
+        const minConfidenceForValidFace = 1.0 - this.settings.faceDetectionTolerance;
+        const isCaught = bestDotProduct < minConfidenceForValidFace;
+
+        if (isCaught) {
+            // Face detection failed - dice is caught
+            return {
+                isCaught: true,
+                result: null,
+                confidence: bestDotProduct,
+                requiredConfidence: minConfidenceForValidFace
+            };
+        } else {
+            // Face detection succeeded - return the result
+            const result = this.mapFaceIndexToNumber(bestFaceIndex, diceType);
+            console.log(`🎯 Dice ${diceIndex} (${diceType}) face detection: face index ${bestFaceIndex} = ${result}, confidence: ${bestDotProduct.toFixed(3)}`);
+            return {
+                isCaught: false,
+                result: result,
+                confidence: bestDotProduct,
+                requiredConfidence: minConfidenceForValidFace
+            };
+        }
+    }
+
+    private getTopFaceNumberForDice(diceIndex: number): number {
+        // Use the unified checkDiceResult method to perform face detection
+        const checkResult = this.checkDiceResult(diceIndex);
+
+        // Just return the result (or fallback if caught)
+        // Note: Caught checking/highlighting is handled separately in monitoring code
+        if (checkResult.isCaught) {
+            return this.getRandomResultForDiceType(this.diceTypeArray[diceIndex]);
+        }
+
+        return checkResult.result!;
     }
 
     private getFaceNormalsForDiceType(diceType: string): THREE.Vector3[] {
         switch (diceType) {
             case 'd4':
-                // Tetrahedron face normals
-                return [
-                    new THREE.Vector3(1, 1, 1).normalize(),
-                    new THREE.Vector3(-1, -1, 1).normalize(),
-                    new THREE.Vector3(-1, 1, -1).normalize(),
-                    new THREE.Vector3(1, -1, -1).normalize()
-                ];
+                // THREE.js TetrahedronGeometry creates a regular tetrahedron with vertices:
+                // v0: (1, 1, 1), v1: (-1, -1, 1), v2: (-1, 1, -1), v3: (1, -1, -1)
+                // Center is at (0, 0, 0)
+
+                // The actual face structure from THREE.js TetrahedronGeometry:
+                // Looking at the source, faces are created as:
+                // Face 0: (2, 3, 0) - contains vertices v2, v3, v0
+                // Face 1: (0, 3, 1) - contains vertices v0, v3, v1
+                // Face 2: (1, 3, 2) - contains vertices v1, v3, v2
+                // Face 3: (2, 0, 1) - contains vertices v2, v0, v1
+
+                const v0 = new THREE.Vector3(1, 1, 1);
+                const v1 = new THREE.Vector3(-1, -1, 1);
+                const v2 = new THREE.Vector3(-1, 1, -1);
+                const v3 = new THREE.Vector3(1, -1, -1);
+
+                // Calculate face centers to ensure normals point outward
+                const center = new THREE.Vector3(0, 0, 0);
+
+                // Face 0: vertices 2, 3, 0
+                const face0Center = new THREE.Vector3().addVectors(v2, v3).add(v0).divideScalar(3);
+                const e0_1 = new THREE.Vector3().subVectors(v3, v2);
+                const e0_2 = new THREE.Vector3().subVectors(v0, v2);
+                let n0 = new THREE.Vector3().crossVectors(e0_1, e0_2).normalize();
+                // Ensure normal points outward
+                if (n0.dot(face0Center.clone().sub(center)) < 0) n0.negate();
+
+                // Face 1: vertices 0, 3, 1
+                const face1Center = new THREE.Vector3().addVectors(v0, v3).add(v1).divideScalar(3);
+                const e1_1 = new THREE.Vector3().subVectors(v3, v0);
+                const e1_2 = new THREE.Vector3().subVectors(v1, v0);
+                let n1 = new THREE.Vector3().crossVectors(e1_1, e1_2).normalize();
+                if (n1.dot(face1Center.clone().sub(center)) < 0) n1.negate();
+
+                // Face 2: vertices 1, 3, 2
+                const face2Center = new THREE.Vector3().addVectors(v1, v3).add(v2).divideScalar(3);
+                const e2_1 = new THREE.Vector3().subVectors(v3, v1);
+                const e2_2 = new THREE.Vector3().subVectors(v2, v1);
+                let n2 = new THREE.Vector3().crossVectors(e2_1, e2_2).normalize();
+                if (n2.dot(face2Center.clone().sub(center)) < 0) n2.negate();
+
+                // Face 3: vertices 2, 0, 1
+                const face3Center = new THREE.Vector3().addVectors(v2, v0).add(v1).divideScalar(3);
+                const e3_1 = new THREE.Vector3().subVectors(v0, v2);
+                const e3_2 = new THREE.Vector3().subVectors(v1, v2);
+                let n3 = new THREE.Vector3().crossVectors(e3_1, e3_2).normalize();
+                if (n3.dot(face3Center.clone().sub(center)) < 0) n3.negate();
+
+                console.log('D4 Face normals calculated:');
+                console.log(`  Face 0 (value 1): (${n0.x.toFixed(3)}, ${n0.y.toFixed(3)}, ${n0.z.toFixed(3)})`);
+                console.log(`  Face 1 (value 2): (${n1.x.toFixed(3)}, ${n1.y.toFixed(3)}, ${n1.z.toFixed(3)})`);
+                console.log(`  Face 2 (value 3): (${n2.x.toFixed(3)}, ${n2.y.toFixed(3)}, ${n2.z.toFixed(3)})`);
+                console.log(`  Face 3 (value 4): (${n3.x.toFixed(3)}, ${n3.y.toFixed(3)}, ${n3.z.toFixed(3)})`);
+
+                return [n0, n1, n2, n3];
 
             case 'd6':
                 // Box/Cube face normals
@@ -1544,10 +1620,27 @@ export class D20Dice {
         // For most dice, face index directly maps to face number
         // Special cases can be handled here
         switch (diceType) {
+            case 'd4':
+                // D4 mapping: faces are numbered 1-4
+                // The UV mapping puts faces in a 2x2 grid:
+                // Face 0 (top-left) = 1, Face 1 (top-right) = 2
+                // Face 2 (bottom-left) = 3, Face 3 (bottom-right) = 4
+                return faceIndex + 1;
+
             case 'd6':
                 // Standard d6 face mapping (1-6)
                 const d6Map = [4, 3, 5, 2, 1, 6]; // Adjust based on UV layout
                 return d6Map[faceIndex] || 1;
+
+            case 'd8':
+                // D8 mapping where opposite faces sum to 9
+                // Octahedron opposite pairs based on face normals:
+                // Index 0 (+,+,+) ↔ Index 6 (-,-,-) → 1 ↔ 8
+                // Index 1 (-,+,+) ↔ Index 7 (+,-,-) → 2 ↔ 7
+                // Index 2 (-,-,+) ↔ Index 4 (+,+,-) → 3 ↔ 6
+                // Index 3 (+,-,+) ↔ Index 5 (-,+,-) → 4 ↔ 5
+                const d8Map = [1, 2, 3, 4, 6, 5, 8, 7];
+                return d8Map[faceIndex] || 1;
 
             case 'd10':
                 // D10 uses 0-9 or 00-90
@@ -2382,6 +2475,23 @@ export class D20Dice {
         this.draggedDiceIndex = index;
         this.renderer.domElement.style.cursor = 'grabbing';
 
+        // Clear highlight if this dice is highlighted (completed)
+        if (this.originalMaterials.has(index)) {
+            console.log(`🔄 Clearing highlight from dice ${index} - starting drag`);
+            this.highlightCaughtDice(index, false);
+        }
+
+        // Reset state if it exists (during active monitoring)
+        const state = this.diceStates[index];
+        if (state) {
+            state.isCaught = false;
+            state.isComplete = false;
+            state.result = null;
+            state.stableTime = 0;
+            state.isRolling = true;
+            state.lastMotion = Date.now();
+        }
+
         // Initialize velocity tracking
         this.lastMousePosition = { x: this.dragStartPosition.x, y: this.dragStartPosition.y, time: Date.now() };
         this.mouseVelocity = { x: 0, y: 0 };
@@ -2421,6 +2531,23 @@ export class D20Dice {
             const body = this.diceBodyArray[i];
             const spread = Math.sqrt(this.diceArray.length) * 1.5;
             const angle = (i / this.diceArray.length) * Math.PI * 2;
+
+            // Clear highlight if this dice is highlighted (completed)
+            if (this.originalMaterials.has(i)) {
+                console.log(`🔄 Clearing highlight from dice ${i} - starting drag all`);
+                this.highlightCaughtDice(i, false);
+            }
+
+            // Reset state if it exists (during active monitoring)
+            const state = this.diceStates[i];
+            if (state) {
+                state.isCaught = false;
+                state.isComplete = false;
+                state.result = null;
+                state.stableTime = 0;
+                state.isRolling = true;
+                state.lastMotion = Date.now();
+            }
 
             body.position.set(
                 Math.cos(angle) * spread,
@@ -2550,11 +2677,39 @@ export class D20Dice {
 
         // Start checking for settling based on what was rolled
         if (rollingSingleDice) {
-            // Single dice - check only that dice
-            this.checkSingleDiceSettling(rolledDiceIndex);
+            // Check if this is part of an active group roll (monitoring is still running)
+            if (this.currentMonitor !== null && this.diceStates.length > 0 && rolledDiceIndex < this.diceStates.length) {
+                // This is a reroll of a caught dice from a group roll - just reset its state
+                const state = this.diceStates[rolledDiceIndex];
+                state.isRolling = true;
+                state.isCaught = false;
+                state.isComplete = false;
+                state.result = null;
+                state.stableTime = 0;
+                state.lastMotion = Date.now();
+                console.log(`🔄 Rerolling dice ${rolledDiceIndex} as part of active group roll - state reset`);
+                // Don't call checkSingleDiceSettling - let the group monitor handle it
+            } else {
+                // True single dice roll - check only that dice
+                this.checkSingleDiceSettling(rolledDiceIndex);
+            }
         } else {
-            // Multiple dice - check all
-            this.checkMultiDiceSettling();
+            // Multiple dice - use enhanced monitoring with catching detection
+            this.initializeDiceStates();
+            // Note: Forces already applied above, just start monitoring
+            this.startIndividualDiceMonitoring(
+                (result) => {
+                    // On completion, trigger callback
+                    if (this.onRollComplete) {
+                        this.onRollComplete(result);
+                    }
+                    this.isRolling = false;
+                },
+                (error) => {
+                    console.error('Throw monitoring error:', error);
+                    this.isRolling = false;
+                }
+            );
         }
 
         // Set timeout for force stop
@@ -2590,6 +2745,16 @@ export class D20Dice {
     }
 
     private animate() {
+        // Stop animation loop if view is no longer active
+        if (!this.isViewActive) {
+            console.log('🛑 Animation loop stopped - view is no longer active');
+            if (this.animationId !== null) {
+                cancelAnimationFrame(this.animationId);
+                this.animationId = null;
+            }
+            return;
+        }
+
         this.animationId = requestAnimationFrame(() => this.animate());
 
         // Step physics simulation with fixed timestep for consistency
@@ -2624,83 +2789,7 @@ export class D20Dice {
     }
 
 
-    public roll(): Promise<string> {
-        return new Promise((resolve) => {
-            if (this.isRolling) return;
-
-            // Check if there are any dice
-            if (this.diceArray.length === 0) {
-                resolve('No dice to roll');
-                return;
-            }
-
-            this.isRolling = true;
-            this.multiRollResolve = resolve;
-
-            // Timeout mechanism - force completion after 10 seconds
-            this.rollTimeoutId = setTimeout(() => {
-                if (this.isRolling) {
-                    console.log('⏰ Roll timeout - force completing dice roll');
-                    this.completeMultiRoll();
-                }
-            }, 10000);
-
-            // Reset result animation state and make all physics bodies dynamic
-            this.showingResult = false;
-            for (let i = 0; i < this.diceBodyArray.length; i++) {
-                const body = this.diceBodyArray[i];
-                body.type = CANNON.Body.DYNAMIC;
-            }
-
-            // Apply physics to all dice for realistic rolling
-            for (let i = 0; i < this.diceArray.length; i++) {
-                const body = this.diceBodyArray[i];
-
-                // Reset position with some randomness
-                const spread = Math.min(8, Math.sqrt(this.diceArray.length) * 2);
-                body.position.set(
-                    (Math.random() - 0.5) * spread,
-                    8 + Math.random() * 2,
-                    (Math.random() - 0.5) * spread
-                );
-
-                // Random rotation
-                body.quaternion.set(
-                    Math.random() * 2 - 1,
-                    Math.random() * 2 - 1,
-                    Math.random() * 2 - 1,
-                    Math.random() * 2 - 1
-                ).normalize();
-
-                // Apply random throw force
-                const throwForce = new CANNON.Vec3(
-                    (Math.random() - 0.5) * 12,
-                    -2 - Math.random() * 2,
-                    (Math.random() - 0.5) * 12
-                );
-                body.velocity.copy(throwForce);
-
-                // Apply random spin
-                body.angularVelocity.set(
-                    (Math.random() - 0.5) * 15,
-                    (Math.random() - 0.5) * 15,
-                    (Math.random() - 0.5) * 15
-                );
-            }
-
-            // Set up settling detection with extended timeout
-            const baseTimeout = 6000;
-            const extendedTimeout = baseTimeout + (this.settings.motionThreshold * 1000);
-            console.log(`🕐 Multi-dice roll timeout set to ${extendedTimeout}ms`);
-
-            this.rollTimeout = setTimeout(() => {
-                this.forceStopMultiRoll();
-            }, extendedTimeout);
-
-            // Start checking for settling
-            this.checkMultiDiceSettling();
-        });
-    }
+    // Old roll method removed - replaced by enhanced roll method with individual dice tracking
 
     private rollResolve: ((value: number) => void) | null = null;
     private multiRollResolve: ((value: string) => void) | null = null;
@@ -3331,6 +3420,403 @@ export class D20Dice {
                 canvas.style.cursor = 'default';
             }
         }
+    }
+
+    // Individual dice states for enhanced roll system
+    private diceStates: Array<{
+        index: number;
+        type: string;
+        isRolling: boolean;
+        isCaught: boolean;
+        isComplete: boolean;
+        result: number | null;
+        lastMotion: number;
+        stableTime: number;
+    }> = [];
+    private currentMonitor: (() => void) | null = null;
+    private originalMaterials: Map<number, THREE.Material | THREE.Material[]> = new Map();
+
+    // Enhanced roll method with individual dice detection
+    public async roll(): Promise<string> {
+        return new Promise((resolve, reject) => {
+            try {
+                if (this.diceArray.length === 0) {
+                    reject(new Error('No dice to roll'));
+                    return;
+                }
+
+                console.log(`🎲 Starting enhanced roll with ${this.diceArray.length} dice`);
+
+                // Initialize dice states
+                this.initializeDiceStates();
+
+                // Apply physics impulse to all dice
+                this.applyRollForces();
+
+                // Start monitoring individual dice
+                this.startIndividualDiceMonitoring(resolve, reject);
+
+            } catch (error) {
+                console.error('Roll error:', error);
+                reject(error);
+            }
+        });
+    }
+
+    private initializeDiceStates() {
+        this.diceStates = [];
+        for (let i = 0; i < this.diceArray.length; i++) {
+            this.diceStates.push({
+                index: i,
+                type: this.diceTypeArray[i] || 'd20',
+                isRolling: true,
+                isCaught: false,
+                isComplete: false,
+                result: null,
+                lastMotion: Date.now(),
+                stableTime: 0
+            });
+        }
+        console.log(`🎯 Initialized ${this.diceStates.length} dice states`);
+    }
+
+    private applyRollForces() {
+        this.diceBodyArray.forEach((body, index) => {
+            if (body) {
+                // Reset position to prevent stacking
+                const spread = Math.min(this.diceArray.length * 0.3, 4);
+                const angle = (index / this.diceArray.length) * Math.PI * 2;
+                const radius = spread * 0.5;
+
+                body.position.set(
+                    Math.cos(angle) * radius,
+                    5 + Math.random() * 2,
+                    Math.sin(angle) * radius
+                );
+
+                // Apply random rotation
+                body.quaternion.set(
+                    Math.random() - 0.5,
+                    Math.random() - 0.5,
+                    Math.random() - 0.5,
+                    Math.random() - 0.5
+                );
+                body.quaternion.normalize();
+
+                // Apply strong impulse force
+                const forceMultiplier = 15 + Math.random() * 10;
+                const force = new CANNON.Vec3(
+                    (Math.random() - 0.5) * forceMultiplier,
+                    Math.random() * 5,
+                    (Math.random() - 0.5) * forceMultiplier
+                );
+                body.applyImpulse(force);
+
+                // Apply random torque
+                const torque = new CANNON.Vec3(
+                    (Math.random() - 0.5) * 20,
+                    (Math.random() - 0.5) * 20,
+                    (Math.random() - 0.5) * 20
+                );
+                body.applyTorque(torque);
+
+                console.log(`🎲 Applied force to dice ${index}: force=${force.length().toFixed(2)}, torque=${torque.length().toFixed(2)}`);
+            }
+        });
+    }
+
+    private startIndividualDiceMonitoring(resolve: (value: string) => void, reject: (reason?: any) => void) {
+        const startTime = Date.now();
+        const maxWaitTime = 15000; // Maximum 15 seconds
+        const checkInterval = 100; // Check every 100ms
+
+        const monitor = () => {
+            try {
+                // Early exit if view is no longer active
+                if (!this.isViewActive) {
+                    console.log('🛑 Monitoring stopped - view is no longer active');
+                    this.currentMonitor = null;
+                    this.diceStates = [];
+                    return;
+                }
+
+                const now = Date.now();
+                let allComplete = true;
+                let statusUpdate = '';
+
+                // Check each die individually
+                for (let i = 0; i < this.diceStates.length; i++) {
+                    const state = this.diceStates[i];
+                    const body = this.diceBodyArray[i];
+
+                    if (!state.isComplete && body) {
+                        // Calculate motion (velocity + angular velocity)
+                        const linearVel = body.velocity.length();
+                        const angularVel = body.angularVelocity.length();
+                        const totalMotion = linearVel + angularVel;
+
+                        // Check if dice has settled
+                        if (totalMotion < this.settings.motionThreshold) {
+                            if (state.stableTime === 0) {
+                                state.stableTime = now;
+                            } else if (now - state.stableTime > 2000 && !state.isComplete) {
+                                // Dice has been stable for 2 seconds - check if it can be determined
+                                // Re-check every 500ms for caught dice in case they micro-settle
+                                const shouldCheck = !state.isCaught || (now - state.lastMotion > 500);
+
+                                if (shouldCheck) {
+                                    const checkResult = this.checkDiceResult(i);
+
+                                    if (checkResult.isCaught) {
+                                        if (!state.isCaught) {
+                                            // First time catching this dice - no highlight for caught state
+                                            state.isCaught = true;
+                                            state.isRolling = false;
+                                            state.result = null;
+                                            console.log(`🥅 Dice ${i} (${state.type}) CAUGHT! Face confidence: ${checkResult.confidence.toFixed(3)}, required: ${checkResult.requiredConfidence.toFixed(3)}`);
+                                        }
+                                        // Update lastMotion to prevent rapid re-checking
+                                        state.lastMotion = now;
+                                    } else {
+                                        // Face detection succeeded - HIGHLIGHT the completed dice
+                                        if (state.isCaught) {
+                                            // Was caught but now valid - clear caught state and highlight as complete
+                                            console.log(`✅ Dice ${i} (${state.type}) was caught but has now settled with result: ${checkResult.result}`);
+                                        } else {
+                                            console.log(`✅ Dice ${i} (${state.type}) settled with result: ${checkResult.result}`);
+                                        }
+                                        state.result = checkResult.result;
+                                        state.isComplete = true;
+                                        state.isRolling = false;
+                                        state.isCaught = false;
+                                        // Highlight completed dice
+                                        this.highlightCaughtDice(i, true);
+                                    }
+                                }
+                            }
+                        } else {
+                            // Dice is moving again - reset stability timer
+                            state.stableTime = 0;
+                            state.lastMotion = now;
+
+                            // If dice was marked as caught but is moving again, give it another chance
+                            if (state.isCaught) {
+                                console.log(`🔄 Dice ${i} was caught but is moving again - clearing caught state`);
+                                state.isCaught = false;
+                                state.isRolling = true;
+                            }
+
+                            // If dice was completed but is moving again, remove highlight
+                            if (state.isComplete) {
+                                console.log(`🔄 Dice ${i} was complete but is moving again - clearing highlight`);
+                                state.isComplete = false;
+                                state.isRolling = true;
+                                this.highlightCaughtDice(i, false);
+                            }
+                        }
+
+                        if (!state.isComplete) {
+                            allComplete = false;
+                        }
+                    }
+                }
+
+                // Update status
+                const completed = this.diceStates.filter(d => d.isComplete).length;
+                const caught = this.diceStates.filter(d => d.isCaught && !d.isComplete).length;
+                const rolling = this.diceStates.filter(d => d.isRolling && !d.isCaught && !d.isComplete).length;
+
+                statusUpdate = `Rolling: ${rolling}, Caught: ${caught}, Complete: ${completed}/${this.diceStates.length}`;
+
+                // Only log status occasionally to avoid spam
+                if (Math.random() < 0.1) {
+                    console.log(`🎯 Status - ${statusUpdate}`);
+                }
+
+                // If there are caught dice, DON'T show results yet - wait for reroll
+                if (caught > 0 && rolling === 0) {
+                    // All dice have settled, but some are caught - wait for user to reroll
+                    if (completed > 0 && Math.random() < 0.05) {
+                        console.log(`⏸️ Waiting for reroll - ${caught} dice caught, ${completed} dice valid`);
+                    }
+                    // Continue monitoring but don't resolve (only if view is still active)
+                    if (this.isViewActive) {
+                        setTimeout(monitor, checkInterval);
+                    } else {
+                        console.log('🛑 Monitoring stopped - view is no longer active');
+                        this.currentMonitor = null;
+                        this.diceStates = [];
+                    }
+                    return;
+                }
+
+                // Check if all dice are complete (and none are caught)
+                if (allComplete && caught === 0) {
+                    // All dice have valid results - show final result
+                    const results = this.diceStates.map(d => d.result).filter(r => r !== null);
+                    const total = results.reduce((sum, val) => sum + val!, 0);
+
+                    const breakdown = this.diceStates
+                        .map((state, i) => `${state.type}=${state.result}`)
+                        .join(' + ');
+
+                    const resultString = `${breakdown} = ${total}`;
+                    console.log(`🏆 All dice complete! Result: ${resultString}`);
+
+                    // Clear monitoring state
+                    this.currentMonitor = null;
+                    this.diceStates = [];
+
+                    resolve(resultString);
+                    return;
+                }
+
+                // Check for timeout
+                if (now - startTime > maxWaitTime) {
+                    console.log(`⏰ Roll timeout after ${maxWaitTime/1000}s`);
+                    // Force completion with current results
+                    const partialResults = this.diceStates.map((state, i) => {
+                        if (state.result !== null) {
+                            return state.result;
+                        } else {
+                            // Force detect result for incomplete dice
+                            return this.getTopFaceNumberForDice(i);
+                        }
+                    });
+                    const total = partialResults.reduce((sum, val) => sum + val, 0);
+                    const breakdown = partialResults
+                        .map((result, i) => `${this.diceStates[i].type}=${result}`)
+                        .join(' + ');
+
+                    // Clear all highlights before resolving
+                    this.clearAllHighlights();
+
+                    // Clear monitoring state
+                    this.currentMonitor = null;
+                    this.diceStates = [];
+
+                    resolve(`${breakdown} = ${total}`);
+                    return;
+                }
+
+                // Continue monitoring (only if view is still active)
+                if (this.isViewActive) {
+                    setTimeout(monitor, checkInterval);
+                } else {
+                    console.log('🛑 Monitoring stopped - view is no longer active');
+                    this.currentMonitor = null;
+                    this.diceStates = [];
+                }
+
+            } catch (error) {
+                console.error('Monitoring error:', error);
+                // Clear monitoring state on error
+                this.currentMonitor = null;
+                this.diceStates = [];
+                reject(error);
+            }
+        };
+
+        // Store the monitor function so it can be resumed after reroll
+        this.currentMonitor = monitor;
+
+        // Start monitoring
+        monitor();
+    }
+
+    // Method to manually reroll caught dice
+    public rerollCaughtDice(): boolean {
+        const caughtDice = this.diceStates.filter(d => d.isCaught && !d.isComplete);
+
+        if (caughtDice.length === 0) {
+            console.log('No caught dice to reroll');
+            return false;
+        }
+
+        console.log(`🎲 Rerolling ${caughtDice.length} caught dice`);
+
+        caughtDice.forEach(state => {
+            const body = this.diceBodyArray[state.index];
+            if (body) {
+                // Remove highlight from caught dice
+                this.highlightCaughtDice(state.index, false);
+
+                // Reset dice state
+                state.isCaught = false;
+                state.isRolling = true;
+                state.stableTime = 0;
+                state.lastMotion = Date.now();
+
+                // Apply new force to caught dice - ensure they fall down
+                const forceMultiplier = 10 + Math.random() * 8;
+                const force = new CANNON.Vec3(
+                    (Math.random() - 0.5) * forceMultiplier,
+                    -5, // Strong downward force to prevent recatching
+                    (Math.random() - 0.5) * forceMultiplier
+                );
+                body.applyImpulse(force);
+
+                console.log(`🔄 Rerolled dice ${state.index} with force ${force.length().toFixed(2)}`);
+            }
+        });
+
+        return true;
+    }
+
+    // Get current dice status for UI updates
+    public getDiceStatus(): Array<{index: number, type: string, status: string, result?: number}> {
+        return this.diceStates.map(state => ({
+            index: state.index,
+            type: state.type,
+            status: state.isComplete ? 'complete' :
+                   state.isCaught ? 'caught' :
+                   state.isRolling ? 'rolling' : 'unknown',
+            result: state.result || undefined
+        }));
+    }
+
+    // Highlight completed dice with emissive glow
+    private highlightCaughtDice(index: number, highlight: boolean) {
+        const dice = this.diceArray[index];
+        if (!dice) return;
+
+        if (highlight) {
+            // Store original material if not already stored
+            if (!this.originalMaterials.has(index)) {
+                this.originalMaterials.set(index, dice.material);
+            }
+
+            // Create highlighted material with configured color
+            const currentMaterial = Array.isArray(dice.material) ? dice.material[0] : dice.material;
+            const highlightedMaterial = (currentMaterial as THREE.MeshStandardMaterial).clone();
+            // Convert hex color string to number (e.g., "#00ff00" -> 0x00ff00)
+            const colorHex = parseInt(this.settings.completedDiceHighlightColor.replace('#', ''), 16);
+            highlightedMaterial.emissive.setHex(colorHex);
+            highlightedMaterial.emissiveIntensity = 0.8;
+            dice.material = highlightedMaterial;
+
+            console.log(`🔆 Highlighted completed dice ${index}`);
+        } else {
+            // Restore original material
+            const originalMaterial = this.originalMaterials.get(index);
+            if (originalMaterial) {
+                dice.material = originalMaterial;
+                this.originalMaterials.delete(index);
+                console.log(`🔅 Removed highlight from dice ${index}`);
+            }
+        }
+    }
+
+    // Clear all highlights
+    private clearAllHighlights() {
+        this.originalMaterials.forEach((originalMaterial, index) => {
+            const dice = this.diceArray[index];
+            if (dice) {
+                dice.material = originalMaterial;
+            }
+        });
+        this.originalMaterials.clear();
+        console.log('🔅 Cleared all dice highlights');
     }
 }
 

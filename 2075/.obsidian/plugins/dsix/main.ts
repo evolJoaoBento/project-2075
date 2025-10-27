@@ -1,6 +1,7 @@
-import { Plugin } from 'obsidian';
+import { Plugin, Notice, WorkspaceLeaf } from 'obsidian';
 import { D20Dice } from './d20-dice';
 import { DiceSettings, DEFAULT_SETTINGS, DiceSettingTab } from './settings';
+import { DiceChatView, CHAT_VIEW_TYPE } from './chat-view';
 
 export default class D20DicePlugin extends Plugin {
     settings: DiceSettings;
@@ -14,6 +15,9 @@ export default class D20DicePlugin extends Plugin {
     private updateClickthroughCallback: ((enabled: boolean) => void) | null = null;
     private updateRollButtonTextCallback: ((diceType: string) => void) | null = null;
     private updateDiceCountDisplayCallback: (() => void) | null = null;
+
+    // API Integration
+    private chatRibbonIcon: HTMLElement | null = null;
 
     async onload() {
         await this.loadSettings();
@@ -37,6 +41,15 @@ export default class D20DicePlugin extends Plugin {
         this.addRibbonIcon('dice', 'Toggle D20 Dice Roller', (evt: MouseEvent) => {
             this.toggleDiceOverlay();
         });
+
+        // Register chat view
+        this.registerView(
+            CHAT_VIEW_TYPE,
+            (leaf) => new DiceChatView(leaf, this)
+        );
+
+        // Initialize API integration
+        this.refreshApiIntegration();
 
         this.addSettingTab(new DiceSettingTab(this.app, this));
     }
@@ -77,6 +90,18 @@ export default class D20DicePlugin extends Plugin {
 
         // Result display
         const resultElement = this.controlsPanel.createDiv({ cls: 'dice-result-overlay' });
+
+        // Dice status display
+        const statusElement = this.controlsPanel.createDiv({ cls: 'dice-status-display' });
+        statusElement.style.cssText = 'margin: 5px 0; padding: 8px; background: var(--background-primary); border-radius: 4px; font-size: 12px; max-height: 150px; overflow-y: auto;';
+
+        // Reroll caught dice button
+        const rerollButton = this.controlsPanel.createEl('button', {
+            text: 'Reroll Caught Dice',
+            cls: 'dice-reroll-button'
+        });
+        rerollButton.style.cssText = 'width: 100%; padding: 6px; font-size: 12px; background: var(--color-orange); color: white; border: 1px solid var(--color-orange); border-radius: 4px; margin: 3px 0; display: none;';
+        rerollButton.disabled = true;
 
         // Update roll button text based on dice type
         const updateRollButtonText = (diceType: string) => {
@@ -254,6 +279,13 @@ export default class D20DicePlugin extends Plugin {
         // Initialize dice with settings
         this.dice = new D20Dice(diceContainer, this.settings);
 
+        // Create any dice that are already in the settings (from dice requests)
+        Object.entries(this.settings.diceCounts).forEach(([diceType, count]) => {
+            for (let i = 0; i < count; i++) {
+                this.dice!.createSingleDice(diceType);
+            }
+        });
+
         // Set up calibration callback
         this.dice.onCalibrationChanged = () => {
             this.saveSettings();
@@ -262,7 +294,39 @@ export default class D20DicePlugin extends Plugin {
         // Set up callback for drag-based rolls (now expects string)
         this.dice.onRollComplete = (result: number | string) => {
             this.showResult(result, resultElement);
+            this.handleRollComplete(result);
         };
+
+        // Set up dice status monitoring
+        let statusInterval: NodeJS.Timeout | null = null;
+        const startStatusMonitoring = () => {
+            if (statusInterval) return;
+            statusInterval = setInterval(() => {
+                if (this.dice) {
+                    const status = this.dice.getDiceStatus();
+                    this.updateDiceStatusDisplay(status, statusElement, rerollButton);
+                }
+            }, 500);
+        };
+
+        const stopStatusMonitoring = () => {
+            if (statusInterval) {
+                clearInterval(statusInterval);
+                statusInterval = null;
+            }
+        };
+
+        // Reroll button functionality
+        rerollButton.addEventListener('click', () => {
+            if (this.dice) {
+                const success = this.dice.rerollCaughtDice();
+                if (success) {
+                    new Notice('Rerolling caught dice...');
+                } else {
+                    new Notice('No caught dice to reroll');
+                }
+            }
+        });
 
         // Set up button roll
         rollButton.addEventListener('click', async () => {
@@ -270,13 +334,32 @@ export default class D20DicePlugin extends Plugin {
             rollButton.textContent = 'Rolling...';
             resultElement.textContent = '';
             resultElement.className = 'dice-result-overlay';
+            statusElement.textContent = 'Starting roll...';
+
+            // Start monitoring dice status during roll
+            startStatusMonitoring();
 
             try {
                 const result = await this.dice!.roll();
                 this.showResult(result, resultElement);
+                this.handleRollComplete(result);
+                statusElement.textContent = 'Roll complete!';
+                rerollButton.style.display = 'none';
+
+                // Stop monitoring after completion
+                setTimeout(() => {
+                    stopStatusMonitoring();
+                    statusElement.textContent = '';
+                }, 3000);
             } catch (error) {
                 resultElement.textContent = 'Error rolling dice';
                 resultElement.className = 'dice-result-overlay error';
+                statusElement.textContent = 'Roll failed';
+
+                // Stop monitoring on error
+                setTimeout(() => {
+                    stopStatusMonitoring();
+                }, 3000);
             } finally {
                 rollButton.disabled = false;
                 updateRollButtonText('d20');
@@ -396,6 +479,8 @@ export default class D20DicePlugin extends Plugin {
     private hideDiceOverlay() {
         if (this.diceOverlay) {
             if (this.dice) {
+                // Stop all monitoring/animation loops immediately
+                this.dice.isViewActive = false;
                 // Clear all dice before destroying
                 this.dice.clearAllDice();
                 this.dice.destroy();
@@ -443,6 +528,208 @@ export default class D20DicePlugin extends Plugin {
         if (this.isVisible && this.updateClickthroughCallback) {
             const newState = !this.clickthroughState;
             this.updateClickthroughCallback(newState);
+        }
+    }
+
+    refreshApiIntegration() {
+        // Remove existing chat ribbon icon if it exists
+        if (this.chatRibbonIcon) {
+            this.chatRibbonIcon.remove();
+            this.chatRibbonIcon = null;
+        }
+
+        // Close any open chat views
+        this.app.workspace.detachLeavesOfType(CHAT_VIEW_TYPE);
+
+        // Add chat ribbon icon if API is enabled
+        if (this.settings.apiEnabled) {
+            this.chatRibbonIcon = this.addRibbonIcon('messages-square', 'Open Dice Chat', (evt: MouseEvent) => {
+                this.openChatView();
+            });
+        }
+    }
+
+    async openChatView() {
+        const existing = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+        if (existing.length > 0) {
+            // Activate existing chat view
+            this.app.workspace.revealLeaf(existing[0]);
+            return;
+        }
+
+        // Create new chat view in right sidebar
+        const leaf = this.app.workspace.getRightLeaf(false);
+        await leaf?.setViewState({
+            type: CHAT_VIEW_TYPE,
+            active: true
+        });
+    }
+
+    // Method to handle dice requests from API when chat is not open
+    handleDiceRequest(expression: string, description: string) {
+        // Parse the expression and set up the dice
+        this.parseDiceExpression(expression);
+
+        // Show the dice overlay if it's not already visible
+        if (!this.isVisible) {
+            this.showDiceOverlay();
+        }
+
+        // Show a notice about the dice request
+        new Notice(`Dice request received: ${expression} - ${description}`);
+    }
+
+    private parseDiceExpression(expression: string) {
+        // Clear current dice counts and existing dice
+        Object.keys(this.settings.diceCounts).forEach(key => {
+            (this.settings.diceCounts as any)[key] = 0;
+        });
+
+        // Clear existing dice from the scene if dice engine exists
+        if (this.dice) {
+            this.dice.clearAllDice();
+        }
+
+        // Simple parser for expressions like "2d6+1d20+3"
+        const diceMatches = expression.match(/(\d+)?d(\d+)/g);
+
+        if (diceMatches) {
+            diceMatches.forEach(match => {
+                const diceMatch = match.match(/(\d+)?d(\d+)/);
+                if (diceMatch) {
+                    const count = parseInt(diceMatch[1]) || 1;
+                    const sides = diceMatch[2];
+                    const diceType = `d${sides}`;
+
+                    if (this.settings.diceCounts.hasOwnProperty(diceType)) {
+                        (this.settings.diceCounts as any)[diceType] += count;
+
+                        // Create the actual dice in the 3D scene if dice engine exists
+                        if (this.dice) {
+                            for (let i = 0; i < count; i++) {
+                                this.dice.createSingleDice(diceType);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        this.saveSettings();
+
+        // Update the dice count display if the overlay is open
+        if (this.updateDiceCountDisplayCallback) {
+            this.updateDiceCountDisplayCallback();
+        }
+
+        // Refresh the dice view to show the new dice
+        this.refreshDiceView();
+    }
+
+    private async handleRollComplete(result: number | string) {
+        // Only submit to API if online mode is enabled
+        if (!this.settings.apiEnabled) {
+            return;
+        }
+
+        try {
+            // Get the connected chat view to access API client
+            const chatViews = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+            if (chatViews.length > 0) {
+                const chatView = chatViews[0].view as DiceChatView;
+                if (chatView && (chatView as any).isConnected) {
+                    // Determine the expression from the result
+                    let expression = '';
+                    if (typeof result === 'string') {
+                        // Parse the result string to extract the expression
+                        const match = result.match(/^(.+?)=/);
+                        if (match) {
+                            expression = match[1];
+                        } else {
+                            expression = result; // Fallback
+                        }
+                    } else {
+                        // Simple number result, assume it's from dice counts
+                        const diceParts: string[] = [];
+                        Object.entries(this.settings.diceCounts).forEach(([diceType, count]) => {
+                            if (count > 0) {
+                                diceParts.push(count === 1 ? diceType : `${count}${diceType}`);
+                            }
+                        });
+                        expression = diceParts.join(' + ') || 'd20';
+                    }
+
+                    // Create a mock dice roll result for API
+                    const diceRollResult = {
+                        id: Date.now(),
+                        expression: expression,
+                        raw_rolls: {},
+                        modifiers: [],
+                        total: typeof result === 'number' ? result : parseInt(result.split('=').pop() || '0'),
+                        is_critical: false,
+                        is_fumble: false,
+                        breakdown: typeof result === 'string' ? result : `${expression}=${result}`
+                    };
+
+                    // Submit to chat via API
+                    await (chatView as any).apiClient.sendDiceResult(diceRollResult);
+
+                    // Show confirmation
+                    new Notice(`Roll shared in chat: ${diceRollResult.breakdown}`);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to submit roll to API:', error);
+            new Notice('Failed to share roll in chat');
+        }
+    }
+
+    private updateDiceStatusDisplay(
+        status: Array<{index: number, type: string, status: string, result?: number}>,
+        statusElement: HTMLElement,
+        rerollButton: HTMLButtonElement
+    ) {
+        if (status.length === 0) {
+            statusElement.textContent = '';
+            rerollButton.style.display = 'none';
+            return;
+        }
+
+        const rolling = status.filter(d => d.status === 'rolling').length;
+        const caught = status.filter(d => d.status === 'caught').length;
+        const complete = status.filter(d => d.status === 'complete').length;
+
+        let displayText = '';
+
+        if (rolling > 0 || caught > 0 || complete > 0) {
+            const parts = [];
+            if (rolling > 0) parts.push(`🎲 ${rolling} rolling`);
+            if (caught > 0) parts.push(`🥅 ${caught} caught`);
+            if (complete > 0) parts.push(`✅ ${complete} done`);
+
+            displayText = parts.join(', ');
+
+            // Show individual dice status
+            const diceDetails = status.map(dice => {
+                const icon = dice.status === 'complete' ? '✅' :
+                           dice.status === 'caught' ? '🥅' :
+                           dice.status === 'rolling' ? '🎲' : '❓';
+                const result = dice.result ? `=${dice.result}` : '';
+                return `${icon} ${dice.type}${result}`;
+            }).join(' ');
+
+            displayText += `\n${diceDetails}`;
+        }
+
+        statusElement.textContent = displayText;
+
+        // Show/hide reroll button based on caught dice
+        if (caught > 0) {
+            rerollButton.style.display = 'block';
+            rerollButton.disabled = false;
+            rerollButton.textContent = `Reroll ${caught} Caught Dice`;
+        } else {
+            rerollButton.style.display = 'none';
         }
     }
 }

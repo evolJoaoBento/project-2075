@@ -104,6 +104,8 @@ export class DiceView extends ItemView {
 
     async onClose() {
         if (this.dice) {
+            // Stop any ongoing monitoring before destroying
+            this.dice.isViewActive = false;
             this.dice.destroy();
             this.dice = null;
         }

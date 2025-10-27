@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => D20DicePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // node_modules/three/build/three.module.js
 var REVISION = "156";
@@ -26790,6 +26790,7 @@ var endShapeContactEvent = {
 
 // d20-dice.ts
 var D20Dice = class {
+  // Track if the view is active
   constructor(container, settings) {
     this.isRolling = false;
     this.animationId = null;
@@ -26818,12 +26819,18 @@ var D20Dice = class {
     this.onRollComplete = null;
     this.ambientLight = null;
     this.directionalLight = null;
+    this.isViewActive = true;
+    // Old roll method removed - replaced by enhanced roll method with individual dice tracking
     this.rollResolve = null;
     this.multiRollResolve = null;
     this.rollTimeoutId = null;
     this.showingResult = false;
     // Callback for when calibration changes
     this.onCalibrationChanged = null;
+    // Individual dice states for enhanced roll system
+    this.diceStates = [];
+    this.currentMonitor = null;
+    this.originalMaterials = /* @__PURE__ */ new Map();
     this.container = container;
     this.settings = settings;
     console.log("\u{1F3B2} D20Dice initialized with settings:", {
@@ -27319,47 +27326,33 @@ var D20Dice = class {
     const rows = 2;
     const cellWidth = 1 / cols;
     const cellHeight = 1 / rows;
-    const padding = 0.02;
     for (let faceIndex = 0; faceIndex < 4; faceIndex++) {
       const col = faceIndex % cols;
       const row = Math.floor(faceIndex / cols);
-      const cellLeft = col * cellWidth + padding;
-      const cellRight = (col + 1) * cellWidth - padding;
-      const cellTop = row * cellHeight + padding;
-      const cellBottom = (row + 1) * cellHeight - padding;
+      const cellLeft = col * cellWidth;
+      const cellRight = (col + 1) * cellWidth;
+      const cellTop = row * cellHeight;
+      const cellBottom = (row + 1) * cellHeight;
       const cellCenterX = (cellLeft + cellRight) / 2;
       const cellCenterY = (cellTop + cellBottom) / 2;
-      const cellW = cellRight - cellLeft;
-      const cellH = cellBottom - cellTop;
-      const triangleHeight = Math.min(cellH, cellW * Math.sqrt(3) / 2);
-      const triangleWidth = triangleHeight * 2 / Math.sqrt(3);
-      const v12 = {
-        x: cellCenterX,
-        y: cellTop + (cellH - triangleHeight) / 2
-      };
-      const v22 = {
-        x: cellCenterX - triangleWidth / 2,
-        y: cellTop + (cellH - triangleHeight) / 2 + triangleHeight
-      };
-      const v3 = {
-        x: cellCenterX + triangleWidth / 2,
-        y: cellTop + (cellH - triangleHeight) / 2 + triangleHeight
-      };
-      const vertices = [v12, v22, v3];
-      vertices.forEach((v) => {
-        v.x = Math.max(cellLeft, Math.min(cellRight, v.x));
-        v.y = Math.max(cellTop, Math.min(cellBottom, v.y));
-      });
+      const triangleBase = cellWidth;
+      const triangleHeight = triangleBase * Math.sqrt(3) / 2;
+      const topX = cellCenterX;
+      const topY = cellCenterY - triangleHeight / 2;
+      const leftX = cellLeft;
+      const leftY = cellCenterY + triangleHeight / 2;
+      const rightX = cellRight;
+      const rightY = cellCenterY + triangleHeight / 2;
       const vertexOffset = faceIndex * 3;
-      uvArray[vertexOffset * 2] = v12.x;
-      uvArray[vertexOffset * 2 + 1] = v12.y;
-      uvArray[vertexOffset * 2 + 2] = v22.x;
-      uvArray[vertexOffset * 2 + 3] = v22.y;
-      uvArray[vertexOffset * 2 + 4] = v3.x;
-      uvArray[vertexOffset * 2 + 5] = v3.y;
+      uvArray[vertexOffset * 2] = topX;
+      uvArray[vertexOffset * 2 + 1] = topY;
+      uvArray[vertexOffset * 2 + 2] = leftX;
+      uvArray[vertexOffset * 2 + 3] = leftY;
+      uvArray[vertexOffset * 2 + 4] = rightX;
+      uvArray[vertexOffset * 2 + 5] = rightY;
     }
     uvAttribute.needsUpdate = true;
-    console.log("Applied tetrahedron UV mapping for D4 with 2x2 grid");
+    console.log("Applied simple tetrahedron UV mapping for D4 with full grid cells");
   }
   applySquareUVMapping(geometry) {
     const uvAttribute = geometry.attributes.uv;
@@ -27730,7 +27723,7 @@ var D20Dice = class {
     return Math.floor(Math.random() * faceCount) + 1;
   }
   checkSingleDiceSettling(diceIndex) {
-    if (!this.isRolling || diceIndex < 0 || diceIndex >= this.diceBodyArray.length)
+    if (!this.isViewActive || !this.isRolling || diceIndex < 0 || diceIndex >= this.diceBodyArray.length)
       return;
     const body = this.diceBodyArray[diceIndex];
     const motionThreshold = this.settings.motionThreshold;
@@ -27752,16 +27745,25 @@ var D20Dice = class {
       this.rollTimeout = null;
     }
     const diceType = this.diceTypeArray[diceIndex];
-    const result = this.getTopFaceNumberForDice(diceIndex);
-    const formattedResult = `1${diceType}(${result}) = ${result}`;
-    console.log(`\u{1F4CA} Single dice roll result: ${formattedResult}`);
-    this.isRolling = false;
-    if (this.onRollComplete) {
-      this.onRollComplete(formattedResult);
-    }
+    setTimeout(() => {
+      const checkResult = this.checkDiceResult(diceIndex);
+      let formattedResult;
+      if (checkResult.isCaught) {
+        this.highlightCaughtDice(diceIndex, true);
+        formattedResult = `1${diceType}(CAUGHT) = CAUGHT - Face confidence: ${checkResult.confidence.toFixed(3)}, required: ${checkResult.requiredConfidence.toFixed(3)}`;
+        console.log(`\u{1F945} Single dice ${diceIndex} (${diceType}) CAUGHT! Face confidence: ${checkResult.confidence.toFixed(3)}, required: ${checkResult.requiredConfidence.toFixed(3)}`);
+      } else {
+        formattedResult = `1${diceType}(${checkResult.result}) = ${checkResult.result}`;
+        console.log(`\u{1F4CA} Single dice roll result: ${formattedResult}`);
+      }
+      this.isRolling = false;
+      if (this.onRollComplete) {
+        this.onRollComplete(formattedResult);
+      }
+    }, 2e3);
   }
   checkMultiDiceSettling() {
-    if (!this.isRolling)
+    if (!this.isViewActive || !this.isRolling)
       return;
     let allSettled = true;
     const motionThreshold = this.settings.motionThreshold;
@@ -27831,13 +27833,12 @@ var D20Dice = class {
     console.log("\u23F0 Force stopping multi-dice roll due to timeout");
     this.completeMultiRoll();
   }
-  getTopFaceNumberForDice(diceIndex) {
+  // Check if dice can be determined, or if it's caught
+  checkDiceResult(diceIndex) {
     const diceType = this.diceTypeArray[diceIndex];
     const diceMesh = this.diceArray[diceIndex];
-    const diceBody = this.diceBodyArray[diceIndex];
-    if (!diceMesh || !diceBody) {
-      console.warn(`Missing mesh or body for dice ${diceIndex}`);
-      return this.getRandomResultForDiceType(diceType);
+    if (!diceMesh) {
+      return { isCaught: false, result: this.getRandomResultForDiceType(diceType), confidence: 0, requiredConfidence: 0 };
     }
     const faceNormals = this.getFaceNormalsForDiceType(diceType);
     const detectionVector = diceType === "d4" ? new Vector3(0, -1, 0) : new Vector3(0, 1, 0);
@@ -27852,19 +27853,71 @@ var D20Dice = class {
         bestFaceIndex = i;
       }
     }
-    const result = this.mapFaceIndexToNumber(bestFaceIndex, diceType);
-    console.log(`\u{1F3AF} Dice ${diceIndex} (${diceType}) face detection: face index ${bestFaceIndex} = ${result}, confidence: ${bestDotProduct.toFixed(3)}`);
-    return result;
+    const minConfidenceForValidFace = 1 - this.settings.faceDetectionTolerance;
+    const isCaught = bestDotProduct < minConfidenceForValidFace;
+    if (isCaught) {
+      return {
+        isCaught: true,
+        result: null,
+        confidence: bestDotProduct,
+        requiredConfidence: minConfidenceForValidFace
+      };
+    } else {
+      const result = this.mapFaceIndexToNumber(bestFaceIndex, diceType);
+      console.log(`\u{1F3AF} Dice ${diceIndex} (${diceType}) face detection: face index ${bestFaceIndex} = ${result}, confidence: ${bestDotProduct.toFixed(3)}`);
+      return {
+        isCaught: false,
+        result,
+        confidence: bestDotProduct,
+        requiredConfidence: minConfidenceForValidFace
+      };
+    }
+  }
+  getTopFaceNumberForDice(diceIndex) {
+    const checkResult = this.checkDiceResult(diceIndex);
+    if (checkResult.isCaught) {
+      return this.getRandomResultForDiceType(this.diceTypeArray[diceIndex]);
+    }
+    return checkResult.result;
   }
   getFaceNormalsForDiceType(diceType) {
     switch (diceType) {
       case "d4":
-        return [
-          new Vector3(1, 1, 1).normalize(),
-          new Vector3(-1, -1, 1).normalize(),
-          new Vector3(-1, 1, -1).normalize(),
-          new Vector3(1, -1, -1).normalize()
-        ];
+        const v02 = new Vector3(1, 1, 1);
+        const v12 = new Vector3(-1, -1, 1);
+        const v22 = new Vector3(-1, 1, -1);
+        const v3 = new Vector3(1, -1, -1);
+        const center = new Vector3(0, 0, 0);
+        const face0Center = new Vector3().addVectors(v22, v3).add(v02).divideScalar(3);
+        const e0_1 = new Vector3().subVectors(v3, v22);
+        const e0_2 = new Vector3().subVectors(v02, v22);
+        let n0 = new Vector3().crossVectors(e0_1, e0_2).normalize();
+        if (n0.dot(face0Center.clone().sub(center)) < 0)
+          n0.negate();
+        const face1Center = new Vector3().addVectors(v02, v3).add(v12).divideScalar(3);
+        const e1_1 = new Vector3().subVectors(v3, v02);
+        const e1_2 = new Vector3().subVectors(v12, v02);
+        let n1 = new Vector3().crossVectors(e1_1, e1_2).normalize();
+        if (n1.dot(face1Center.clone().sub(center)) < 0)
+          n1.negate();
+        const face2Center = new Vector3().addVectors(v12, v3).add(v22).divideScalar(3);
+        const e2_1 = new Vector3().subVectors(v3, v12);
+        const e2_2 = new Vector3().subVectors(v22, v12);
+        let n2 = new Vector3().crossVectors(e2_1, e2_2).normalize();
+        if (n2.dot(face2Center.clone().sub(center)) < 0)
+          n2.negate();
+        const face3Center = new Vector3().addVectors(v22, v02).add(v12).divideScalar(3);
+        const e3_1 = new Vector3().subVectors(v02, v22);
+        const e3_2 = new Vector3().subVectors(v12, v22);
+        let n3 = new Vector3().crossVectors(e3_1, e3_2).normalize();
+        if (n3.dot(face3Center.clone().sub(center)) < 0)
+          n3.negate();
+        console.log("D4 Face normals calculated:");
+        console.log(`  Face 0 (value 1): (${n0.x.toFixed(3)}, ${n0.y.toFixed(3)}, ${n0.z.toFixed(3)})`);
+        console.log(`  Face 1 (value 2): (${n1.x.toFixed(3)}, ${n1.y.toFixed(3)}, ${n1.z.toFixed(3)})`);
+        console.log(`  Face 2 (value 3): (${n2.x.toFixed(3)}, ${n2.y.toFixed(3)}, ${n2.z.toFixed(3)})`);
+        console.log(`  Face 3 (value 4): (${n3.x.toFixed(3)}, ${n3.y.toFixed(3)}, ${n3.z.toFixed(3)})`);
+        return [n0, n1, n2, n3];
       case "d6":
         return [
           new Vector3(1, 0, 0),
@@ -27961,11 +28014,11 @@ var D20Dice = class {
           [9, 8, 1]
         ];
         return faces.map((face) => {
-          const v12 = new Vector3(...vertices[face[0]]);
-          const v22 = new Vector3(...vertices[face[1]]);
-          const v3 = new Vector3(...vertices[face[2]]);
-          const edge1 = v22.clone().sub(v12);
-          const edge2 = v3.clone().sub(v12);
+          const v13 = new Vector3(...vertices[face[0]]);
+          const v23 = new Vector3(...vertices[face[1]]);
+          const v32 = new Vector3(...vertices[face[2]]);
+          const edge1 = v23.clone().sub(v13);
+          const edge2 = v32.clone().sub(v13);
           return edge1.cross(edge2).normalize();
         });
       default:
@@ -27975,9 +28028,14 @@ var D20Dice = class {
   }
   mapFaceIndexToNumber(faceIndex, diceType) {
     switch (diceType) {
+      case "d4":
+        return faceIndex + 1;
       case "d6":
         const d6Map = [4, 3, 5, 2, 1, 6];
         return d6Map[faceIndex] || 1;
+      case "d8":
+        const d8Map = [1, 2, 3, 4, 6, 5, 8, 7];
+        return d8Map[faceIndex] || 1;
       case "d10":
         return faceIndex;
       case "d20":
@@ -28633,6 +28691,19 @@ var D20Dice = class {
     this.isDragging = true;
     this.draggedDiceIndex = index;
     this.renderer.domElement.style.cursor = "grabbing";
+    if (this.originalMaterials.has(index)) {
+      console.log(`\u{1F504} Clearing highlight from dice ${index} - starting drag`);
+      this.highlightCaughtDice(index, false);
+    }
+    const state = this.diceStates[index];
+    if (state) {
+      state.isCaught = false;
+      state.isComplete = false;
+      state.result = null;
+      state.stableTime = 0;
+      state.isRolling = true;
+      state.lastMotion = Date.now();
+    }
     this.lastMousePosition = { x: this.dragStartPosition.x, y: this.dragStartPosition.y, time: Date.now() };
     this.mouseVelocity = { x: 0, y: 0 };
     if (this.rollTimeout) {
@@ -28660,6 +28731,19 @@ var D20Dice = class {
       const body = this.diceBodyArray[i];
       const spread = Math.sqrt(this.diceArray.length) * 1.5;
       const angle = i / this.diceArray.length * Math.PI * 2;
+      if (this.originalMaterials.has(i)) {
+        console.log(`\u{1F504} Clearing highlight from dice ${i} - starting drag all`);
+        this.highlightCaughtDice(i, false);
+      }
+      const state = this.diceStates[i];
+      if (state) {
+        state.isCaught = false;
+        state.isComplete = false;
+        state.result = null;
+        state.stableTime = 0;
+        state.isRolling = true;
+        state.lastMotion = Date.now();
+      }
       body.position.set(
         Math.cos(angle) * spread,
         2,
@@ -28744,9 +28828,32 @@ var D20Dice = class {
     const rolledDiceIndex = this.draggedDiceIndex;
     this.draggedDiceIndex = -1;
     if (rollingSingleDice) {
-      this.checkSingleDiceSettling(rolledDiceIndex);
+      if (this.currentMonitor !== null && this.diceStates.length > 0 && rolledDiceIndex < this.diceStates.length) {
+        const state = this.diceStates[rolledDiceIndex];
+        state.isRolling = true;
+        state.isCaught = false;
+        state.isComplete = false;
+        state.result = null;
+        state.stableTime = 0;
+        state.lastMotion = Date.now();
+        console.log(`\u{1F504} Rerolling dice ${rolledDiceIndex} as part of active group roll - state reset`);
+      } else {
+        this.checkSingleDiceSettling(rolledDiceIndex);
+      }
     } else {
-      this.checkMultiDiceSettling();
+      this.initializeDiceStates();
+      this.startIndividualDiceMonitoring(
+        (result) => {
+          if (this.onRollComplete) {
+            this.onRollComplete(result);
+          }
+          this.isRolling = false;
+        },
+        (error) => {
+          console.error("Throw monitoring error:", error);
+          this.isRolling = false;
+        }
+      );
     }
     const baseTimeout = 6e3;
     const extendedTimeout = baseTimeout + this.settings.motionThreshold * 1e3;
@@ -28773,6 +28880,14 @@ var D20Dice = class {
     this.calculateResult();
   }
   animate() {
+    if (!this.isViewActive) {
+      console.log("\u{1F6D1} Animation loop stopped - view is no longer active");
+      if (this.animationId !== null) {
+        cancelAnimationFrame(this.animationId);
+        this.animationId = null;
+      }
+      return;
+    }
     this.animationId = requestAnimationFrame(() => this.animate());
     this.world.step(1 / 60);
     if (this.isRolling && Math.random() < 0.01) {
@@ -28792,62 +28907,6 @@ var D20Dice = class {
       }
     }
     this.renderer.render(this.scene, this.camera);
-  }
-  roll() {
-    return new Promise((resolve) => {
-      if (this.isRolling)
-        return;
-      if (this.diceArray.length === 0) {
-        resolve("No dice to roll");
-        return;
-      }
-      this.isRolling = true;
-      this.multiRollResolve = resolve;
-      this.rollTimeoutId = setTimeout(() => {
-        if (this.isRolling) {
-          console.log("\u23F0 Roll timeout - force completing dice roll");
-          this.completeMultiRoll();
-        }
-      }, 1e4);
-      this.showingResult = false;
-      for (let i = 0; i < this.diceBodyArray.length; i++) {
-        const body = this.diceBodyArray[i];
-        body.type = Body.DYNAMIC;
-      }
-      for (let i = 0; i < this.diceArray.length; i++) {
-        const body = this.diceBodyArray[i];
-        const spread = Math.min(8, Math.sqrt(this.diceArray.length) * 2);
-        body.position.set(
-          (Math.random() - 0.5) * spread,
-          8 + Math.random() * 2,
-          (Math.random() - 0.5) * spread
-        );
-        body.quaternion.set(
-          Math.random() * 2 - 1,
-          Math.random() * 2 - 1,
-          Math.random() * 2 - 1,
-          Math.random() * 2 - 1
-        ).normalize();
-        const throwForce = new Vec3(
-          (Math.random() - 0.5) * 12,
-          -2 - Math.random() * 2,
-          (Math.random() - 0.5) * 12
-        );
-        body.velocity.copy(throwForce);
-        body.angularVelocity.set(
-          (Math.random() - 0.5) * 15,
-          (Math.random() - 0.5) * 15,
-          (Math.random() - 0.5) * 15
-        );
-      }
-      const baseTimeout = 6e3;
-      const extendedTimeout = baseTimeout + this.settings.motionThreshold * 1e3;
-      console.log(`\u{1F550} Multi-dice roll timeout set to ${extendedTimeout}ms`);
-      this.rollTimeout = setTimeout(() => {
-        this.forceStopMultiRoll();
-      }, extendedTimeout);
-      this.checkMultiDiceSettling();
-    });
   }
   calculateResult() {
     const result = this.getTopFaceNumber();
@@ -29321,6 +29380,285 @@ var D20Dice = class {
       }
     }
   }
+  // Enhanced roll method with individual dice detection
+  async roll() {
+    return new Promise((resolve, reject) => {
+      try {
+        if (this.diceArray.length === 0) {
+          reject(new Error("No dice to roll"));
+          return;
+        }
+        console.log(`\u{1F3B2} Starting enhanced roll with ${this.diceArray.length} dice`);
+        this.initializeDiceStates();
+        this.applyRollForces();
+        this.startIndividualDiceMonitoring(resolve, reject);
+      } catch (error) {
+        console.error("Roll error:", error);
+        reject(error);
+      }
+    });
+  }
+  initializeDiceStates() {
+    this.diceStates = [];
+    for (let i = 0; i < this.diceArray.length; i++) {
+      this.diceStates.push({
+        index: i,
+        type: this.diceTypeArray[i] || "d20",
+        isRolling: true,
+        isCaught: false,
+        isComplete: false,
+        result: null,
+        lastMotion: Date.now(),
+        stableTime: 0
+      });
+    }
+    console.log(`\u{1F3AF} Initialized ${this.diceStates.length} dice states`);
+  }
+  applyRollForces() {
+    this.diceBodyArray.forEach((body, index) => {
+      if (body) {
+        const spread = Math.min(this.diceArray.length * 0.3, 4);
+        const angle = index / this.diceArray.length * Math.PI * 2;
+        const radius = spread * 0.5;
+        body.position.set(
+          Math.cos(angle) * radius,
+          5 + Math.random() * 2,
+          Math.sin(angle) * radius
+        );
+        body.quaternion.set(
+          Math.random() - 0.5,
+          Math.random() - 0.5,
+          Math.random() - 0.5,
+          Math.random() - 0.5
+        );
+        body.quaternion.normalize();
+        const forceMultiplier = 15 + Math.random() * 10;
+        const force = new Vec3(
+          (Math.random() - 0.5) * forceMultiplier,
+          Math.random() * 5,
+          (Math.random() - 0.5) * forceMultiplier
+        );
+        body.applyImpulse(force);
+        const torque2 = new Vec3(
+          (Math.random() - 0.5) * 20,
+          (Math.random() - 0.5) * 20,
+          (Math.random() - 0.5) * 20
+        );
+        body.applyTorque(torque2);
+        console.log(`\u{1F3B2} Applied force to dice ${index}: force=${force.length().toFixed(2)}, torque=${torque2.length().toFixed(2)}`);
+      }
+    });
+  }
+  startIndividualDiceMonitoring(resolve, reject) {
+    const startTime = Date.now();
+    const maxWaitTime = 15e3;
+    const checkInterval = 100;
+    const monitor = () => {
+      try {
+        if (!this.isViewActive) {
+          console.log("\u{1F6D1} Monitoring stopped - view is no longer active");
+          this.currentMonitor = null;
+          this.diceStates = [];
+          return;
+        }
+        const now = Date.now();
+        let allComplete = true;
+        let statusUpdate = "";
+        for (let i = 0; i < this.diceStates.length; i++) {
+          const state = this.diceStates[i];
+          const body = this.diceBodyArray[i];
+          if (!state.isComplete && body) {
+            const linearVel = body.velocity.length();
+            const angularVel = body.angularVelocity.length();
+            const totalMotion = linearVel + angularVel;
+            if (totalMotion < this.settings.motionThreshold) {
+              if (state.stableTime === 0) {
+                state.stableTime = now;
+              } else if (now - state.stableTime > 2e3 && !state.isComplete) {
+                const shouldCheck = !state.isCaught || now - state.lastMotion > 500;
+                if (shouldCheck) {
+                  const checkResult = this.checkDiceResult(i);
+                  if (checkResult.isCaught) {
+                    if (!state.isCaught) {
+                      state.isCaught = true;
+                      state.isRolling = false;
+                      state.result = null;
+                      console.log(`\u{1F945} Dice ${i} (${state.type}) CAUGHT! Face confidence: ${checkResult.confidence.toFixed(3)}, required: ${checkResult.requiredConfidence.toFixed(3)}`);
+                    }
+                    state.lastMotion = now;
+                  } else {
+                    if (state.isCaught) {
+                      console.log(`\u2705 Dice ${i} (${state.type}) was caught but has now settled with result: ${checkResult.result}`);
+                    } else {
+                      console.log(`\u2705 Dice ${i} (${state.type}) settled with result: ${checkResult.result}`);
+                    }
+                    state.result = checkResult.result;
+                    state.isComplete = true;
+                    state.isRolling = false;
+                    state.isCaught = false;
+                    this.highlightCaughtDice(i, true);
+                  }
+                }
+              }
+            } else {
+              state.stableTime = 0;
+              state.lastMotion = now;
+              if (state.isCaught) {
+                console.log(`\u{1F504} Dice ${i} was caught but is moving again - clearing caught state`);
+                state.isCaught = false;
+                state.isRolling = true;
+              }
+              if (state.isComplete) {
+                console.log(`\u{1F504} Dice ${i} was complete but is moving again - clearing highlight`);
+                state.isComplete = false;
+                state.isRolling = true;
+                this.highlightCaughtDice(i, false);
+              }
+            }
+            if (!state.isComplete) {
+              allComplete = false;
+            }
+          }
+        }
+        const completed = this.diceStates.filter((d) => d.isComplete).length;
+        const caught = this.diceStates.filter((d) => d.isCaught && !d.isComplete).length;
+        const rolling = this.diceStates.filter((d) => d.isRolling && !d.isCaught && !d.isComplete).length;
+        statusUpdate = `Rolling: ${rolling}, Caught: ${caught}, Complete: ${completed}/${this.diceStates.length}`;
+        if (Math.random() < 0.1) {
+          console.log(`\u{1F3AF} Status - ${statusUpdate}`);
+        }
+        if (caught > 0 && rolling === 0) {
+          if (completed > 0 && Math.random() < 0.05) {
+            console.log(`\u23F8\uFE0F Waiting for reroll - ${caught} dice caught, ${completed} dice valid`);
+          }
+          if (this.isViewActive) {
+            setTimeout(monitor, checkInterval);
+          } else {
+            console.log("\u{1F6D1} Monitoring stopped - view is no longer active");
+            this.currentMonitor = null;
+            this.diceStates = [];
+          }
+          return;
+        }
+        if (allComplete && caught === 0) {
+          const results = this.diceStates.map((d) => d.result).filter((r) => r !== null);
+          const total = results.reduce((sum, val) => sum + val, 0);
+          const breakdown = this.diceStates.map((state, i) => `${state.type}=${state.result}`).join(" + ");
+          const resultString = `${breakdown} = ${total}`;
+          console.log(`\u{1F3C6} All dice complete! Result: ${resultString}`);
+          this.currentMonitor = null;
+          this.diceStates = [];
+          resolve(resultString);
+          return;
+        }
+        if (now - startTime > maxWaitTime) {
+          console.log(`\u23F0 Roll timeout after ${maxWaitTime / 1e3}s`);
+          const partialResults = this.diceStates.map((state, i) => {
+            if (state.result !== null) {
+              return state.result;
+            } else {
+              return this.getTopFaceNumberForDice(i);
+            }
+          });
+          const total = partialResults.reduce((sum, val) => sum + val, 0);
+          const breakdown = partialResults.map((result, i) => `${this.diceStates[i].type}=${result}`).join(" + ");
+          this.clearAllHighlights();
+          this.currentMonitor = null;
+          this.diceStates = [];
+          resolve(`${breakdown} = ${total}`);
+          return;
+        }
+        if (this.isViewActive) {
+          setTimeout(monitor, checkInterval);
+        } else {
+          console.log("\u{1F6D1} Monitoring stopped - view is no longer active");
+          this.currentMonitor = null;
+          this.diceStates = [];
+        }
+      } catch (error) {
+        console.error("Monitoring error:", error);
+        this.currentMonitor = null;
+        this.diceStates = [];
+        reject(error);
+      }
+    };
+    this.currentMonitor = monitor;
+    monitor();
+  }
+  // Method to manually reroll caught dice
+  rerollCaughtDice() {
+    const caughtDice = this.diceStates.filter((d) => d.isCaught && !d.isComplete);
+    if (caughtDice.length === 0) {
+      console.log("No caught dice to reroll");
+      return false;
+    }
+    console.log(`\u{1F3B2} Rerolling ${caughtDice.length} caught dice`);
+    caughtDice.forEach((state) => {
+      const body = this.diceBodyArray[state.index];
+      if (body) {
+        this.highlightCaughtDice(state.index, false);
+        state.isCaught = false;
+        state.isRolling = true;
+        state.stableTime = 0;
+        state.lastMotion = Date.now();
+        const forceMultiplier = 10 + Math.random() * 8;
+        const force = new Vec3(
+          (Math.random() - 0.5) * forceMultiplier,
+          -5,
+          // Strong downward force to prevent recatching
+          (Math.random() - 0.5) * forceMultiplier
+        );
+        body.applyImpulse(force);
+        console.log(`\u{1F504} Rerolled dice ${state.index} with force ${force.length().toFixed(2)}`);
+      }
+    });
+    return true;
+  }
+  // Get current dice status for UI updates
+  getDiceStatus() {
+    return this.diceStates.map((state) => ({
+      index: state.index,
+      type: state.type,
+      status: state.isComplete ? "complete" : state.isCaught ? "caught" : state.isRolling ? "rolling" : "unknown",
+      result: state.result || void 0
+    }));
+  }
+  // Highlight completed dice with emissive glow
+  highlightCaughtDice(index, highlight) {
+    const dice = this.diceArray[index];
+    if (!dice)
+      return;
+    if (highlight) {
+      if (!this.originalMaterials.has(index)) {
+        this.originalMaterials.set(index, dice.material);
+      }
+      const currentMaterial = Array.isArray(dice.material) ? dice.material[0] : dice.material;
+      const highlightedMaterial = currentMaterial.clone();
+      const colorHex = parseInt(this.settings.completedDiceHighlightColor.replace("#", ""), 16);
+      highlightedMaterial.emissive.setHex(colorHex);
+      highlightedMaterial.emissiveIntensity = 0.8;
+      dice.material = highlightedMaterial;
+      console.log(`\u{1F506} Highlighted completed dice ${index}`);
+    } else {
+      const originalMaterial = this.originalMaterials.get(index);
+      if (originalMaterial) {
+        dice.material = originalMaterial;
+        this.originalMaterials.delete(index);
+        console.log(`\u{1F505} Removed highlight from dice ${index}`);
+      }
+    }
+  }
+  // Clear all highlights
+  clearAllHighlights() {
+    this.originalMaterials.forEach((originalMaterial, index) => {
+      const dice = this.diceArray[index];
+      if (dice) {
+        dice.material = originalMaterial;
+      }
+    });
+    this.originalMaterials.clear();
+    console.log("\u{1F505} Cleared all dice highlights");
+  }
 };
 
 // settings.ts
@@ -29405,6 +29743,8 @@ var DEFAULT_SETTINGS = {
   motionThreshold: 2,
   // Face detection defaults
   faceDetectionTolerance: 0.3,
+  // Highlight defaults
+  completedDiceHighlightColor: "#00ff00",
   // Debug defaults
   enableMotionDebug: false,
   // Face mapping defaults (1:1 mapping initially)
@@ -29429,7 +29769,10 @@ var DEFAULT_SETTINGS = {
     17: 18,
     18: 19,
     19: 20
-  }
+  },
+  // API Integration defaults
+  apiEnabled: false,
+  apiEndpoint: "http://localhost:5000"
 };
 var DiceSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -29735,9 +30078,26 @@ var DiceSettingTab = class extends import_obsidian.PluginSettingTab {
     explanationEl.style.fontSize = "12px";
     explanationEl.style.opacity = "0.8";
     explanationEl.style.marginTop = "5px";
-    new import_obsidian.Setting(motionSection).setName("Face detection tolerance").setDesc("How precisely the face must be pointing up (0.1 = very strict, 0.5 = relaxed). Lower values require face to be more perfectly aligned.").addSlider((slider) => slider.setLimits(0.05, 0.5, 0.05).setValue(this.plugin.settings.faceDetectionTolerance).setDynamicTooltip().onChange(async (value) => {
+    new import_obsidian.Setting(motionSection).setName("Face detection tolerance").setDesc("How precisely a face must be aligned to be considered valid (0.05 = very strict, 0.5 = relaxed). Dice that don't meet this threshold are CAUGHT and highlighted for reroll.").addSlider((slider) => slider.setLimits(0.05, 0.5, 0.05).setValue(this.plugin.settings.faceDetectionTolerance).setDynamicTooltip().onChange(async (value) => {
       console.log("\u2699\uFE0F Face detection tolerance changed from", this.plugin.settings.faceDetectionTolerance, "to", value);
       this.plugin.settings.faceDetectionTolerance = value;
+      await this.plugin.saveSettings();
+      this.plugin.refreshDiceView();
+    }));
+    new import_obsidian.Setting(motionSection).setName("Completed dice highlight color").setDesc("Color to highlight dice that have successfully settled with a valid result").addColorPicker((color) => color.setValue(this.plugin.settings.completedDiceHighlightColor).onChange(async (value) => {
+      console.log("\u2699\uFE0F Completed dice highlight color changed to", value);
+      this.plugin.settings.completedDiceHighlightColor = value;
+      await this.plugin.saveSettings();
+      this.plugin.refreshDiceView();
+    }));
+    const apiSection = this.createCollapsibleSection(containerEl, "API Integration", "api");
+    new import_obsidian.Setting(apiSection).setName("Enable online dice system").setDesc("Enable integration with online dice roll API for multiplayer dice rolling").addToggle((toggle) => toggle.setValue(this.plugin.settings.apiEnabled).onChange(async (value) => {
+      this.plugin.settings.apiEnabled = value;
+      await this.plugin.saveSettings();
+      this.plugin.refreshApiIntegration();
+    }));
+    new import_obsidian.Setting(apiSection).setName("API endpoint").setDesc("URL of the dice roll API server (e.g., http://localhost:5000 or https://your-server.com)").addText((text) => text.setPlaceholder("http://localhost:5000").setValue(this.plugin.settings.apiEndpoint).onChange(async (value) => {
+      this.plugin.settings.apiEndpoint = value;
       await this.plugin.saveSettings();
     }));
     const debugSection = this.createCollapsibleSection(containerEl, "Debug Settings", "debug");
@@ -29749,8 +30109,910 @@ var DiceSettingTab = class extends import_obsidian.PluginSettingTab {
   }
 };
 
+// chat-view.ts
+var import_obsidian2 = require("obsidian");
+
+// api-client.ts
+var DiceAPIClient = class {
+  constructor(baseUrl) {
+    this.roomId = "obsidian-room";
+    this.username = "";
+    this.userRole = "player";
+    this.authToken = "";
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+  }
+  setUserInfo(username, role = "player") {
+    this.username = username;
+    this.userRole = role;
+  }
+  setRoomId(roomId) {
+    this.roomId = roomId || "obsidian-room";
+  }
+  getRoomId() {
+    return this.roomId;
+  }
+  setAuthToken(token) {
+    this.authToken = token;
+  }
+  getAuthToken() {
+    return this.authToken;
+  }
+  isAuthenticated() {
+    return !!this.authToken;
+  }
+  getAuthHeaders() {
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (this.authToken) {
+      headers["Authorization"] = `Bearer ${this.authToken}`;
+    }
+    return headers;
+  }
+  async joinRoom() {
+    console.log("=== JOIN ROOM DEBUG ===");
+    console.log("Current token:", this.authToken ? `${this.authToken.substring(0, 50)}...` : "NO TOKEN");
+    console.log("Headers being sent:", this.getAuthHeaders());
+    console.log("API endpoint:", this.baseUrl);
+    if (this.userRole === "dm") {
+      try {
+        console.log("Attempting to create room:", this.roomId);
+        const createResponse = await fetch(`${this.baseUrl}/api/chat/rooms`, {
+          method: "POST",
+          headers: this.getAuthHeaders(),
+          body: JSON.stringify({
+            room_id: this.roomId
+          })
+        });
+        if (createResponse.ok || createResponse.status === 409) {
+        } else {
+          const errorText = await createResponse.text();
+          throw new Error(`Failed to create room: ${errorText}`);
+        }
+      } catch (error) {
+        console.warn("Room creation failed, attempting to join existing room:", error.message);
+        if (error.message.includes("Invalid authorization token")) {
+          throw new Error("FORCE_LOGOUT:Authentication token is invalid. Please logout and login again.");
+        }
+      }
+    }
+    const response = await fetch(`${this.baseUrl}/api/chat/rooms/${this.roomId}/join`, {
+      method: "POST",
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        username: this.username,
+        user_role: this.userRole
+      })
+    });
+    if (!response.ok) {
+      let errorDetails = "Unknown error";
+      try {
+        const errorBody = await response.text();
+        errorDetails = errorBody;
+      } catch (e) {
+      }
+      throw new Error(`Failed to join room: ${response.statusText} - ${errorDetails}`);
+    }
+  }
+  async sendMessage(content) {
+    const response = await fetch(`${this.baseUrl}/api/chat/rooms/${this.roomId}/messages`, {
+      method: "POST",
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        content,
+        username: this.username,
+        user_role: this.userRole
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to send message: ${response.statusText}`);
+    }
+    return await response.json();
+  }
+  async getMessages(limit = 50, offset = 0) {
+    const response = await fetch(`${this.baseUrl}/api/chat/rooms/${this.roomId}/messages?limit=${limit}&offset=${offset}`, {
+      method: "GET",
+      headers: this.getAuthHeaders()
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to get messages: ${response.statusText}`);
+    }
+    return await response.json();
+  }
+  async rollDice(request) {
+    const response = await fetch(`${this.baseUrl}/api/dice/roll`, {
+      method: "POST",
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(request)
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to roll dice: ${response.statusText}`);
+    }
+    return await response.json();
+  }
+  async sendDiceRequest(expression, description) {
+    const content = `\u{1F3B2} **${this.username} requests dice roll**: ${expression}
+**Description**: ${description}
+
+*Click this message to automatically set up the dice and roll!*`;
+    return await this.sendMessage(content);
+  }
+  async sendDiceResult(result) {
+    const content = `\u{1F3AF} **Rolled ${result.total}** (${result.expression})
+**Breakdown**: ${result.breakdown}`;
+    return await this.sendMessage(content);
+  }
+  parseDiceRequest(message) {
+    const requestMatch = message.match(/🎲 \*\*(.+?) requests dice roll\*\*: (.+?)\n\*\*Description\*\*: (.+?)\n/);
+    if (requestMatch) {
+      return {
+        expression: requestMatch[2],
+        description: requestMatch[3],
+        requester: requestMatch[1]
+      };
+    }
+    return null;
+  }
+  async checkHealth() {
+    try {
+      console.log("Health check with headers:", this.getAuthHeaders());
+      const response = await fetch(`${this.baseUrl}/api/dice/health`, {
+        method: "GET",
+        headers: this.getAuthHeaders()
+      });
+      console.log("Health check response:", response.status, response.statusText);
+      if (response.ok) {
+        const data = await response.json();
+        return data.status === "healthy";
+      }
+      return false;
+    } catch (error) {
+      console.error("Health check failed:", error);
+      return false;
+    }
+  }
+  async login(username, password) {
+    console.log("=== LOGIN DEBUG ===");
+    console.log("Login endpoint:", `${this.baseUrl}/api/auth/login`);
+    console.log("Username:", username);
+    const response = await fetch(`${this.baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+    console.log("Login response status:", response.status);
+    if (!response.ok) {
+      const error = await response.json();
+      console.error("Login failed with error:", error);
+      throw new Error(error.error || "Login failed");
+    }
+    const result = await response.json();
+    console.log("Login successful, token received:", result.token ? `${result.token.substring(0, 50)}...` : "NO TOKEN");
+    console.log("User info:", result.user);
+    this.setAuthToken(result.token);
+    return result;
+  }
+  async register(username, password) {
+    const response = await fetch(`${this.baseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Registration failed");
+    }
+    const result = await response.json();
+    this.setAuthToken(result.token);
+    return result;
+  }
+  logout() {
+    this.authToken = "";
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem("dice_chat_token");
+    }
+  }
+  // Auto-generate room ID for DMs
+  generateRoomId() {
+    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let result = "";
+    for (let i = 0; i < 8; i++) {
+      result += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return result;
+  }
+};
+
+// chat-view.ts
+var CHAT_VIEW_TYPE = "dice-chat-view";
+var DiceChatView = class extends import_obsidian2.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.diceExpression = "";
+    this.diceCounts = { d4: 0, d6: 0, d8: 0, d10: 0, d12: 0, d20: 0 };
+    this.modifier = 0;
+    this.userRole = "player";
+    this.username = "";
+    this.isPolling = false;
+    this.pollTimeout = null;
+    this.lastMessageId = 0;
+    this.isConnected = false;
+    this.plugin = plugin;
+    this.apiClient = new DiceAPIClient(plugin.settings.apiEndpoint);
+  }
+  getViewType() {
+    return CHAT_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "Dice Chat";
+  }
+  getIcon() {
+    return "messages-square";
+  }
+  async onOpen() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    container.addClass("dice-chat-view");
+    if (typeof localStorage !== "undefined") {
+      const storedToken = localStorage.getItem("dice_chat_token");
+      if (storedToken) {
+        this.apiClient.setAuthToken(storedToken);
+      }
+    }
+    if (!this.apiClient.isAuthenticated()) {
+      await this.showAuthenticationSetup();
+    } else if (!this.isConnected) {
+      await this.showUserSetup();
+    } else {
+      await this.setupChatInterface();
+    }
+  }
+  async showAuthenticationSetup() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    const headerEl = container.createEl("div", { cls: "dice-chat-auth-header" });
+    headerEl.style.cssText = "padding: 20px; border-bottom: 1px solid var(--background-modifier-border); text-align: center; position: relative;";
+    headerEl.createEl("h2", { text: "\u{1F510} Authentication Required" });
+    headerEl.createEl("p", { text: "Please login or register to use the dice chat system" });
+    if (typeof localStorage !== "undefined" && localStorage.getItem("dice_chat_token")) {
+      const logoutBtn = headerEl.createEl("button", { text: "Clear Stored Login", cls: "auth-logout-btn" });
+      logoutBtn.style.cssText = "position: absolute; top: 15px; right: 15px; padding: 5px 10px; font-size: 11px; background: #ff6b35; color: white; border: none; border-radius: 3px; cursor: pointer;";
+      logoutBtn.addEventListener("click", () => {
+        this.apiClient.logout();
+        new import_obsidian2.Notice("Stored credentials cleared");
+        this.showAuthenticationSetup();
+      });
+      logoutBtn.addEventListener("mouseenter", () => {
+        logoutBtn.style.opacity = "0.8";
+      });
+      logoutBtn.addEventListener("mouseleave", () => {
+        logoutBtn.style.opacity = "1";
+      });
+    }
+    const authContainer = container.createEl("div", { cls: "dice-chat-auth" });
+    authContainer.style.cssText = "padding: 20px; max-width: 400px; margin: 0 auto;";
+    let isLoginMode = true;
+    let usernameValue = "";
+    let passwordValue = "";
+    const toggleText = authContainer.createEl("div", { cls: "auth-toggle" });
+    toggleText.style.cssText = "text-align: center; margin-bottom: 20px; color: var(--text-muted);";
+    const formContainer = authContainer.createDiv({ cls: "auth-form" });
+    const updateForm = () => {
+      formContainer.empty();
+      const title = formContainer.createEl("h3", { text: isLoginMode ? "Login" : "Register" });
+      title.style.cssText = "text-align: center; margin-bottom: 20px; color: var(--text-accent);";
+      new import_obsidian2.Setting(formContainer).setName("Username").setDesc("Your account username").addText((text) => text.setPlaceholder("Enter username").setValue(usernameValue).onChange((value) => {
+        usernameValue = value;
+      }));
+      new import_obsidian2.Setting(formContainer).setName("Password").setDesc("Your account password").addText((text) => text.setPlaceholder("Enter password").setValue(passwordValue).then((input) => {
+        input.inputEl.type = "password";
+      }).onChange((value) => {
+        passwordValue = value;
+      }));
+      const buttonContainer = formContainer.createDiv({ cls: "auth-buttons" });
+      buttonContainer.style.cssText = "margin-top: 20px; text-align: center;";
+      const submitButton = buttonContainer.createEl("button", {
+        text: isLoginMode ? "Login" : "Register",
+        cls: "mod-cta"
+      });
+      submitButton.style.cssText = "margin-right: 10px; padding: 10px 20px;";
+      const toggleButton = buttonContainer.createEl("button", {
+        text: isLoginMode ? "Need to register?" : "Already have an account?"
+      });
+      toggleButton.style.cssText = "padding: 10px 20px;";
+      submitButton.addEventListener("click", async () => {
+        if (!usernameValue.trim() || !passwordValue.trim()) {
+          new import_obsidian2.Notice("Please enter both username and password");
+          return;
+        }
+        try {
+          submitButton.disabled = true;
+          submitButton.textContent = isLoginMode ? "Logging in..." : "Registering...";
+          let result;
+          if (isLoginMode) {
+            result = await this.apiClient.login(usernameValue, passwordValue);
+          } else {
+            result = await this.apiClient.register(usernameValue, passwordValue);
+          }
+          if (typeof localStorage !== "undefined") {
+            localStorage.setItem("dice_chat_token", result.token);
+          }
+          new import_obsidian2.Notice(`${isLoginMode ? "Login" : "Registration"} successful!`);
+          await this.showUserSetup();
+        } catch (error) {
+          console.error("Authentication failed:", error);
+          new import_obsidian2.Notice(`${isLoginMode ? "Login" : "Registration"} failed: ${error.message}`);
+        } finally {
+          submitButton.disabled = false;
+          submitButton.textContent = isLoginMode ? "Login" : "Register";
+        }
+      });
+      toggleButton.addEventListener("click", () => {
+        isLoginMode = !isLoginMode;
+        updateForm();
+      });
+      const inputs = formContainer.querySelectorAll("input");
+      inputs.forEach((input) => {
+        input.addEventListener("keypress", (e) => {
+          if (e.key === "Enter") {
+            submitButton.click();
+          }
+        });
+      });
+    };
+    updateForm();
+  }
+  async showUserSetup() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    const headerEl = container.createEl("div", { cls: "dice-chat-setup-header" });
+    headerEl.style.cssText = "padding: 20px; border-bottom: 1px solid var(--background-modifier-border); position: relative;";
+    headerEl.createEl("h2", { text: "Join Dice Chat" });
+    const logoutBtn = headerEl.createEl("button", { text: "Logout", cls: "setup-logout-btn" });
+    logoutBtn.style.cssText = "position: absolute; top: 15px; right: 15px; padding: 5px 10px; font-size: 11px; background: #ff6b35; color: white; border: none; border-radius: 3px; cursor: pointer;";
+    logoutBtn.addEventListener("click", () => {
+      this.logout();
+    });
+    logoutBtn.addEventListener("mouseenter", () => {
+      logoutBtn.style.opacity = "0.8";
+    });
+    logoutBtn.addEventListener("mouseleave", () => {
+      logoutBtn.style.opacity = "1";
+    });
+    const setupContainer = container.createEl("div", { cls: "dice-chat-setup" });
+    setupContainer.style.cssText = "padding: 20px;";
+    let usernameValue = "";
+    let roleValue = "player";
+    let sessionIdValue = "";
+    new import_obsidian2.Setting(setupContainer).setName("Username").setDesc("Your display name in the chat").addText((text) => text.setPlaceholder("Enter your username").onChange((value) => {
+      usernameValue = value;
+    }));
+    new import_obsidian2.Setting(setupContainer).setName("Role").setDesc("Your role in the game session").addDropdown((dropdown) => dropdown.addOption("player", "Player").addOption("dm", "Game Master / DM").setValue("player").onChange((value) => {
+      roleValue = value;
+      updateSessionIdVisibility();
+    }));
+    let sessionIdSetting = null;
+    const updateSessionIdVisibility = () => {
+      if (sessionIdSetting) {
+        sessionIdSetting.settingEl.style.display = roleValue === "dm" ? "block" : "block";
+        if (roleValue === "dm") {
+          sessionIdSetting.setDesc("Session/Room ID (leave empty to auto-generate)");
+        } else {
+          sessionIdSetting.setDesc("Session/Room ID to join (leave empty for default room)");
+        }
+      }
+    };
+    sessionIdSetting = new import_obsidian2.Setting(setupContainer).setName("Session ID").setDesc("Session/Room ID to join (leave empty for default room)").addText((text) => text.setPlaceholder("Enter session ID (optional)").onChange((value) => {
+      sessionIdValue = value;
+    }));
+    updateSessionIdVisibility();
+    const buttonContainer = setupContainer.createDiv({ cls: "dice-chat-buttons" });
+    buttonContainer.style.cssText = "margin-top: 20px; text-align: center;";
+    const joinButton = buttonContainer.createEl("button", {
+      text: "Connect to Chat",
+      cls: "mod-cta"
+    });
+    joinButton.style.cssText = "padding: 10px 20px;";
+    joinButton.addEventListener("click", async () => {
+      if (!usernameValue.trim()) {
+        new import_obsidian2.Notice("Please enter a username");
+        return;
+      }
+      try {
+        joinButton.disabled = true;
+        joinButton.textContent = "Connecting...";
+        this.username = usernameValue;
+        this.userRole = roleValue;
+        this.apiClient.setUserInfo(this.username, this.userRole);
+        if (roleValue === "dm") {
+          const roomId = sessionIdValue.trim() || this.apiClient.generateRoomId();
+          this.apiClient.setRoomId(roomId);
+        } else {
+          if (sessionIdValue.trim()) {
+            this.apiClient.setRoomId(sessionIdValue.trim());
+          }
+        }
+        if (typeof localStorage !== "undefined") {
+          const storedToken = localStorage.getItem("dice_chat_token");
+          if (storedToken && !this.apiClient.isAuthenticated()) {
+            this.apiClient.setAuthToken(storedToken);
+          }
+        }
+        const isHealthy = await this.apiClient.checkHealth();
+        if (!isHealthy) {
+          new import_obsidian2.Notice("Cannot connect to dice API server. Check your endpoint settings.");
+          return;
+        }
+        await this.apiClient.joinRoom();
+        this.isConnected = true;
+        await this.setupChatInterface();
+        this.startPolling();
+        new import_obsidian2.Notice("Connected to dice chat!");
+      } catch (error) {
+        console.error("Failed to join chat:", error);
+        if (error.message.includes("Invalid authorization token") || error.message.includes("FORCE_LOGOUT:")) {
+          new import_obsidian2.Notice("Authentication expired. Server may have been restarted. Logging out...");
+          setTimeout(() => this.logout(), 100);
+        } else {
+          new import_obsidian2.Notice("Failed to connect to chat. Check your API endpoint.");
+        }
+      } finally {
+        joinButton.disabled = false;
+        joinButton.textContent = "Connect to Chat";
+      }
+    });
+  }
+  async setupChatInterface() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    const header = container.createDiv({ cls: "dice-chat-header" });
+    header.style.cssText = "display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid var(--background-modifier-border);";
+    const titleDiv = header.createDiv();
+    titleDiv.createEl("h3", { text: "\u{1F3B2} Dice Chat", cls: "dice-chat-title" });
+    titleDiv.style.margin = "0";
+    const userInfoDiv = titleDiv.createDiv({ cls: "dice-chat-user-info" });
+    userInfoDiv.style.cssText = "font-size: 12px; color: var(--text-muted); line-height: 1.2; margin-top: 5px;";
+    userInfoDiv.createEl("div", { text: `${this.username} (${this.userRole.toUpperCase()})` });
+    userInfoDiv.createEl("div", {
+      text: `Room: ${this.apiClient.getRoomId()}`,
+      cls: "dice-chat-room-id"
+    }).style.cssText = "font-family: monospace; font-size: 11px; opacity: 0.8;";
+    const headerButtons = header.createDiv({ cls: "header-buttons" });
+    headerButtons.style.cssText = "display: flex; gap: 5px;";
+    const disconnectButton = headerButtons.createEl("button", { text: "Disconnect", cls: "dice-disconnect-btn" });
+    disconnectButton.style.cssText = "padding: 5px 10px; font-size: 12px; background: var(--background-modifier-error); color: white; border: none; border-radius: 3px; cursor: pointer;";
+    disconnectButton.addEventListener("click", () => this.disconnect());
+    disconnectButton.addEventListener("mouseenter", () => {
+      disconnectButton.style.opacity = "0.8";
+    });
+    disconnectButton.addEventListener("mouseleave", () => {
+      disconnectButton.style.opacity = "1";
+    });
+    const logoutButton = headerButtons.createEl("button", { text: "Logout", cls: "dice-logout-btn" });
+    logoutButton.style.cssText = "padding: 5px 10px; font-size: 12px; background: #ff6b35; color: white; border: none; border-radius: 3px; cursor: pointer;";
+    logoutButton.addEventListener("click", () => this.logout());
+    logoutButton.addEventListener("mouseenter", () => {
+      logoutButton.style.opacity = "0.8";
+    });
+    logoutButton.addEventListener("mouseleave", () => {
+      logoutButton.style.opacity = "1";
+    });
+    const mainContainer = container.createDiv({ cls: "dice-chat-main" });
+    mainContainer.style.cssText = "display: flex; height: calc(100vh - 120px); gap: 15px; padding: 15px;";
+    const chatSection = mainContainer.createDiv({ cls: "dice-chat-section" });
+    chatSection.style.cssText = "flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--background-modifier-border); padding-right: 15px;";
+    this.chatContainer = chatSection.createDiv({ cls: "dice-chat-messages" });
+    this.chatContainer.style.cssText = "flex: 1; overflow-y: auto; border: 1px solid var(--background-modifier-border); padding: 15px; margin-bottom: 15px; border-radius: 8px; background: var(--background-primary);";
+    const inputContainer = chatSection.createDiv({ cls: "dice-chat-input-container" });
+    inputContainer.style.cssText = "display: flex; gap: 8px;";
+    this.messageInput = inputContainer.createEl("input", {
+      type: "text",
+      placeholder: "Type a message..."
+    });
+    this.messageInput.style.cssText = "flex: 1; padding: 10px; border: 1px solid var(--background-modifier-border); border-radius: 5px; background: var(--background-primary); color: var(--text-normal);";
+    const sendButton = inputContainer.createEl("button", {
+      text: "Send",
+      cls: "mod-cta"
+    });
+    sendButton.style.cssText = "padding: 10px 15px;";
+    sendButton.addEventListener("click", () => {
+      this.sendChatMessage();
+    });
+    this.messageInput.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") {
+        this.sendChatMessage();
+      }
+    });
+    if (this.userRole === "dm") {
+      const diceSection = mainContainer.createDiv({ cls: "dice-dice-section" });
+      diceSection.style.cssText = "width: 350px; display: flex; flex-direction: column; background: var(--background-secondary); padding: 15px; border-radius: 8px;";
+      diceSection.createEl("h4", { text: "\u{1F3B2} DM Dice Controls" }).style.cssText = "margin-top: 0; color: var(--text-accent);";
+      this.setupDMDiceControls(diceSection);
+    } else {
+      const playerSection = mainContainer.createDiv({ cls: "dice-player-section" });
+      playerSection.style.cssText = "width: 300px; display: flex; flex-direction: column; background: var(--background-secondary); padding: 15px; border-radius: 8px;";
+      const infoHeader = playerSection.createEl("h4", { text: "\u{1F3AF} Player Info" });
+      infoHeader.style.cssText = "margin-top: 0; color: var(--text-accent);";
+      const infoText = playerSection.createDiv();
+      infoText.style.cssText = "color: var(--text-muted); line-height: 1.5; font-size: 14px;";
+      infoText.innerHTML = `
+                <p><strong>How to roll dice:</strong></p>
+                <ul style="margin: 10px 0; padding-left: 20px;">
+                    <li>Click on clickable dice requests from the DM</li>
+                    <li>Use the main dice interface (dice icon in ribbon)</li>
+                    <li>Rolls are automatically shared in chat</li>
+                </ul>
+                <p><strong>Dice requests:</strong> Click on highlighted messages from the DM to automatically set up dice and open the 3D interface.</p>
+            `;
+    }
+  }
+  setupDMDiceControls(diceSection) {
+    const roomIdDisplay = diceSection.createDiv({ cls: "room-id-display" });
+    roomIdDisplay.style.cssText = "padding: 10px; margin-bottom: 15px; background: var(--background-modifier-success); border-radius: 6px; text-align: center; cursor: pointer; border: 2px solid var(--color-green);";
+    const roomIdLabel = roomIdDisplay.createEl("div", { text: "Room ID (Click to Copy)" });
+    roomIdLabel.style.cssText = "font-size: 11px; color: var(--text-muted); margin-bottom: 5px;";
+    const roomIdText = roomIdDisplay.createEl("div", { text: this.apiClient.getRoomId() });
+    roomIdText.style.cssText = "font-family: monospace; font-size: 16px; font-weight: bold; color: var(--text-normal); letter-spacing: 2px;";
+    roomIdDisplay.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(this.apiClient.getRoomId());
+        const originalText = roomIdText.textContent;
+        roomIdText.textContent = "COPIED!";
+        roomIdText.style.color = "var(--color-green)";
+        setTimeout(() => {
+          roomIdText.textContent = originalText;
+          roomIdText.style.color = "var(--text-normal)";
+        }, 1500);
+        new import_obsidian2.Notice("Room ID copied to clipboard!");
+      } catch (error) {
+        console.error("Failed to copy:", error);
+        const textArea = document.createElement("textarea");
+        textArea.value = this.apiClient.getRoomId();
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        new import_obsidian2.Notice("Room ID copied to clipboard!");
+      }
+    });
+    this.expressionDisplay = diceSection.createDiv({
+      text: "No dice selected",
+      cls: "dice-expression-display"
+    });
+    this.expressionDisplay.style.cssText = "padding: 12px; margin-bottom: 15px; background: var(--background-primary); border-radius: 6px; font-family: monospace; text-align: center; font-weight: bold; border: 2px solid var(--background-modifier-border);";
+    this.diceSelectionContainer = diceSection.createDiv({ cls: "dice-selection-grid" });
+    this.diceSelectionContainer.style.cssText = "display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 15px;";
+    const diceTypes = ["d4", "d6", "d8", "d10", "d12", "d20"];
+    diceTypes.forEach((diceType) => {
+      const diceCard = this.diceSelectionContainer.createDiv({ cls: "dice-card" });
+      diceCard.style.cssText = "border: 1px solid var(--background-modifier-border); padding: 12px; border-radius: 8px; text-align: center; background: var(--background-primary);";
+      const label = diceCard.createEl("div", { text: diceType.toUpperCase(), cls: "dice-type-label" });
+      label.style.cssText = "font-weight: bold; font-size: 13px; color: var(--text-accent); margin-bottom: 8px;";
+      const countDisplay = diceCard.createEl("div", {
+        text: "0",
+        cls: "dice-count-display"
+      });
+      countDisplay.style.cssText = "font-size: 20px; font-weight: bold; margin: 8px 0; color: var(--text-normal);";
+      const buttonContainer = diceCard.createDiv({ cls: "dice-buttons" });
+      buttonContainer.style.cssText = "display: flex; gap: 6px; justify-content: center;";
+      const minusButton = buttonContainer.createEl("button", { text: "-" });
+      const plusButton = buttonContainer.createEl("button", { text: "+" });
+      [minusButton, plusButton].forEach((btn) => {
+        btn.style.cssText = "width: 32px; height: 32px; border-radius: 50%; font-weight: bold; font-size: 16px; cursor: pointer; border: 1px solid var(--interactive-accent); transition: all 0.2s ease;";
+      });
+      minusButton.style.cssText += "background: var(--background-primary); color: var(--text-normal);";
+      plusButton.style.cssText += "background: var(--interactive-accent); color: white;";
+      minusButton.addEventListener("click", () => {
+        if (this.diceCounts[diceType] > 0) {
+          this.diceCounts[diceType]--;
+          this.updateDiceDisplay();
+        }
+      });
+      plusButton.addEventListener("click", () => {
+        this.diceCounts[diceType]++;
+        this.updateDiceDisplay();
+      });
+      diceCard.countDisplay = countDisplay;
+    });
+    const modifierContainer = diceSection.createDiv({ cls: "dice-modifier" });
+    modifierContainer.style.cssText = "display: flex; align-items: center; gap: 10px; margin-bottom: 15px;";
+    const modifierLabel = modifierContainer.createEl("label", { text: "Modifier:" });
+    modifierLabel.style.cssText = "font-weight: 500; color: var(--text-normal);";
+    const modifierInput = modifierContainer.createEl("input", {
+      type: "number",
+      value: "0"
+    });
+    modifierInput.style.cssText = "width: 80px; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 4px; background: var(--background-primary); color: var(--text-normal); text-align: center;";
+    modifierInput.addEventListener("input", () => {
+      this.modifier = parseInt(modifierInput.value) || 0;
+      this.updateDiceDisplay();
+    });
+    const actionButtons = diceSection.createDiv({ cls: "dice-actions" });
+    actionButtons.style.cssText = "display: flex; flex-direction: column; gap: 12px;";
+    this.rollButton = actionButtons.createEl("button", {
+      text: "Roll Dice",
+      cls: "mod-cta dice-roll-button"
+    });
+    this.rollButton.style.cssText = "padding: 12px; font-size: 14px; font-weight: bold; border-radius: 6px;";
+    this.rollButton.disabled = true;
+    const requestButton = actionButtons.createEl("button", {
+      text: "Request Dice Roll",
+      cls: "dice-request-button"
+    });
+    requestButton.style.cssText = "padding: 12px; font-size: 14px; font-weight: bold; border-radius: 6px; background: var(--color-orange); color: white; border: 1px solid var(--color-orange);";
+    requestButton.addEventListener("click", () => {
+      this.sendDiceRequest();
+    });
+    const clearButton = actionButtons.createEl("button", {
+      text: "Clear Dice",
+      cls: "dice-clear-button"
+    });
+    clearButton.style.cssText = "padding: 12px; font-size: 14px; border-radius: 6px; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border);";
+    this.rollButton.addEventListener("click", () => {
+      this.rollDice();
+    });
+    clearButton.addEventListener("click", () => {
+      this.clearDice();
+    });
+    this.loadMessages();
+    setTimeout(() => {
+      this.messageInput.focus();
+    }, 100);
+  }
+  updateDiceDisplay() {
+    if (this.userRole !== "dm" || !this.diceSelectionContainer) {
+      return;
+    }
+    const diceCards = this.diceSelectionContainer.querySelectorAll(".dice-card");
+    const diceTypes = ["d4", "d6", "d8", "d10", "d12", "d20"];
+    diceCards.forEach((card, index) => {
+      const diceType = diceTypes[index];
+      const countDisplay = card.countDisplay;
+      if (countDisplay) {
+        countDisplay.textContent = this.diceCounts[diceType].toString();
+      }
+    });
+    const diceParts = [];
+    diceTypes.forEach((diceType) => {
+      const count = this.diceCounts[diceType];
+      if (count > 0) {
+        diceParts.push(count === 1 ? diceType : `${count}${diceType}`);
+      }
+    });
+    let expression = diceParts.join(" + ") || "";
+    if (this.modifier !== 0) {
+      const modifierText = this.modifier > 0 ? `+${this.modifier}` : `${this.modifier}`;
+      expression = expression ? `${expression} ${modifierText}` : modifierText;
+    }
+    this.diceExpression = expression;
+    if (this.expressionDisplay) {
+      this.expressionDisplay.textContent = expression || "No dice selected";
+    }
+    const hasDice = diceTypes.some((type) => this.diceCounts[type] > 0);
+    if (this.rollButton) {
+      this.rollButton.disabled = !hasDice && this.modifier === 0;
+    }
+  }
+  clearDice() {
+    Object.keys(this.diceCounts).forEach((key) => {
+      this.diceCounts[key] = 0;
+    });
+    this.modifier = 0;
+    if (this.userRole === "dm") {
+      const modifierInput = this.containerEl.querySelector('input[type="number"]');
+      if (modifierInput) {
+        modifierInput.value = "0";
+      }
+    }
+    this.updateDiceDisplay();
+  }
+  async sendChatMessage() {
+    const message = this.messageInput.value.trim();
+    if (!message)
+      return;
+    try {
+      const originalPlaceholder = this.messageInput.placeholder;
+      this.messageInput.placeholder = "Sending...";
+      this.messageInput.disabled = true;
+      await this.apiClient.sendMessage(message);
+      this.messageInput.value = "";
+      await this.loadMessages();
+      this.messageInput.placeholder = originalPlaceholder;
+    } catch (error) {
+      console.error("Failed to send message:", error);
+      new import_obsidian2.Notice("Failed to send message");
+      this.messageInput.placeholder = "Failed to send - try again";
+    } finally {
+      this.messageInput.disabled = false;
+      setTimeout(() => {
+        this.messageInput.focus();
+      }, 10);
+    }
+  }
+  async sendDiceRequest() {
+    if (this.userRole !== "dm") {
+      return;
+    }
+    if (!this.diceExpression) {
+      new import_obsidian2.Notice("Please select dice first");
+      return;
+    }
+    try {
+      await this.apiClient.sendDiceRequest(this.diceExpression, `Roll ${this.diceExpression} for the game`);
+      await this.loadMessages();
+      new import_obsidian2.Notice("Dice request sent!");
+    } catch (error) {
+      console.error("Failed to send dice request:", error);
+      new import_obsidian2.Notice("Failed to send dice request");
+    }
+  }
+  async rollDice() {
+    if (this.userRole !== "dm") {
+      return;
+    }
+    if (!this.diceExpression) {
+      new import_obsidian2.Notice("Please select dice first");
+      return;
+    }
+    try {
+      this.rollButton.disabled = true;
+      this.rollButton.textContent = "Rolling...";
+      const result = await this.apiClient.rollDice({
+        expression: this.diceExpression,
+        description: `Dice roll by ${this.username}`
+      });
+      await this.apiClient.sendDiceResult(result);
+      await this.loadMessages();
+      new import_obsidian2.Notice(`Rolled ${result.total} (${result.breakdown})`);
+      this.clearDice();
+    } catch (error) {
+      console.error("Failed to roll dice:", error);
+      new import_obsidian2.Notice("Failed to roll dice");
+    } finally {
+      this.rollButton.disabled = false;
+      this.rollButton.textContent = "Roll Dice";
+      this.updateDiceDisplay();
+    }
+  }
+  async loadMessages() {
+    try {
+      const response = await this.apiClient.getMessages(50, 0);
+      this.displayMessages(response.messages);
+    } catch (error) {
+      console.error("Failed to load messages:", error);
+    }
+  }
+  displayMessages(messages) {
+    this.chatContainer.empty();
+    messages.forEach((message) => {
+      const messageEl = this.chatContainer.createDiv({ cls: "dice-chat-message" });
+      const diceRequest = this.apiClient.parseDiceRequest(message.content);
+      const isDiceResult = message.content.includes("\u{1F3AF} **Rolled");
+      if (diceRequest) {
+        messageEl.addClass("dice-request-message");
+        messageEl.style.cssText = "border: 2px solid var(--interactive-accent); cursor: pointer; padding: 15px; margin-bottom: 12px; border-radius: 8px; background: var(--background-secondary); transition: background-color 0.2s ease;";
+        if (this.userRole === "player" && diceRequest.requester !== this.username) {
+          messageEl.addEventListener("click", () => {
+            this.populateDiceFromRequest(diceRequest);
+          });
+          messageEl.addEventListener("mouseenter", () => {
+            messageEl.style.background = "var(--background-modifier-hover)";
+          });
+          messageEl.addEventListener("mouseleave", () => {
+            messageEl.style.background = "var(--background-secondary)";
+          });
+        }
+      } else if (isDiceResult) {
+        messageEl.addClass("dice-result-message");
+        messageEl.style.cssText = "border-left: 4px solid var(--color-green); padding: 15px; margin-bottom: 12px; background: var(--background-secondary); border-radius: 0 8px 8px 0;";
+      } else {
+        messageEl.style.cssText = "padding: 12px; margin-bottom: 10px; border-bottom: 1px solid var(--background-modifier-border);";
+      }
+      const header = messageEl.createDiv({ cls: "message-header" });
+      header.style.cssText = "font-weight: bold; margin-bottom: 8px; font-size: 13px;";
+      const roleColor = message.user_role === "dm" ? "var(--color-orange)" : "var(--color-blue)";
+      header.innerHTML = `<span style="color: ${roleColor};">${message.username} (${message.user_role.toUpperCase()})</span>`;
+      const contentEl = messageEl.createDiv({ cls: "message-content" });
+      contentEl.style.cssText = "line-height: 1.5; font-size: 14px;";
+      contentEl.innerHTML = message.content.replace(/\n/g, "<br>");
+      if (message.timestamp) {
+        const timestampEl = messageEl.createDiv({ cls: "message-timestamp" });
+        timestampEl.style.cssText = "font-size: 11px; color: var(--text-muted); margin-top: 8px; text-align: right;";
+        timestampEl.textContent = new Date(message.timestamp).toLocaleTimeString();
+      }
+    });
+    this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
+  }
+  populateDiceFromRequest(request) {
+    this.clearDice();
+    const expression = request.expression;
+    const diceMatches = expression.match(/(\d+)?d(\d+)/g);
+    const modifierMatch = expression.match(/([+-]\d+)(?![d\d])/);
+    if (diceMatches) {
+      diceMatches.forEach((match) => {
+        const diceMatch = match.match(/(\d+)?d(\d+)/);
+        if (diceMatch) {
+          const count = parseInt(diceMatch[1]) || 1;
+          const sides = diceMatch[2];
+          const diceType = `d${sides}`;
+          if (this.diceCounts.hasOwnProperty(diceType)) {
+            this.diceCounts[diceType] += count;
+          }
+        }
+      });
+    }
+    if (modifierMatch) {
+      this.modifier = parseInt(modifierMatch[1]);
+      const modifierInput = this.containerEl.querySelector('input[type="number"]');
+      if (modifierInput) {
+        modifierInput.value = this.modifier.toString();
+      }
+    }
+    this.updateDiceDisplay();
+    new import_obsidian2.Notice(`Dice loaded from request: ${request.expression}`);
+    if (this.plugin.handleDiceRequest) {
+      this.plugin.handleDiceRequest(request.expression, request.description);
+    }
+  }
+  startPolling() {
+    if (this.isPolling)
+      return;
+    this.isPolling = true;
+    const poll = async () => {
+      if (!this.isPolling)
+        return;
+      try {
+        await this.loadMessages();
+      } catch (error) {
+        console.error("Polling error:", error);
+      }
+      this.pollTimeout = setTimeout(poll, 3e3);
+    };
+    poll();
+  }
+  stopPolling() {
+    this.isPolling = false;
+    if (this.pollTimeout) {
+      clearTimeout(this.pollTimeout);
+      this.pollTimeout = null;
+    }
+  }
+  disconnect() {
+    this.stopPolling();
+    this.isConnected = false;
+    this.showUserSetup();
+  }
+  logout() {
+    this.stopPolling();
+    this.isConnected = false;
+    this.apiClient.logout();
+    new import_obsidian2.Notice("Logged out successfully");
+    this.showAuthenticationSetup();
+  }
+  handleApiError(error) {
+    console.error("API Error:", error);
+    if (error.message && error.message.includes("401")) {
+      new import_obsidian2.Notice("Session expired. Please login again.");
+      this.logout();
+      return;
+    }
+    if (error.message && error.message.includes("Failed to fetch")) {
+      new import_obsidian2.Notice("Network error. Check your connection and API endpoint.");
+      return;
+    }
+    new import_obsidian2.Notice(`Error: ${error.message || "Unknown error occurred"}`);
+  }
+  async onClose() {
+    this.stopPolling();
+  }
+};
+
 // main.ts
-var D20DicePlugin = class extends import_obsidian2.Plugin {
+var D20DicePlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.diceOverlay = null;
@@ -29763,6 +31025,8 @@ var D20DicePlugin = class extends import_obsidian2.Plugin {
     this.updateClickthroughCallback = null;
     this.updateRollButtonTextCallback = null;
     this.updateDiceCountDisplayCallback = null;
+    // API Integration
+    this.chatRibbonIcon = null;
   }
   async onload() {
     await this.loadSettings();
@@ -29783,6 +31047,11 @@ var D20DicePlugin = class extends import_obsidian2.Plugin {
     this.addRibbonIcon("dice", "Toggle D20 Dice Roller", (evt) => {
       this.toggleDiceOverlay();
     });
+    this.registerView(
+      CHAT_VIEW_TYPE,
+      (leaf) => new DiceChatView(leaf, this)
+    );
+    this.refreshApiIntegration();
     this.addSettingTab(new DiceSettingTab(this.app, this));
   }
   async onunload() {
@@ -29808,6 +31077,14 @@ var D20DicePlugin = class extends import_obsidian2.Plugin {
       cls: "mod-cta dice-roll-button"
     });
     const resultElement = this.controlsPanel.createDiv({ cls: "dice-result-overlay" });
+    const statusElement = this.controlsPanel.createDiv({ cls: "dice-status-display" });
+    statusElement.style.cssText = "margin: 5px 0; padding: 8px; background: var(--background-primary); border-radius: 4px; font-size: 12px; max-height: 150px; overflow-y: auto;";
+    const rerollButton = this.controlsPanel.createEl("button", {
+      text: "Reroll Caught Dice",
+      cls: "dice-reroll-button"
+    });
+    rerollButton.style.cssText = "width: 100%; padding: 6px; font-size: 12px; background: var(--color-orange); color: white; border: 1px solid var(--color-orange); border-radius: 4px; margin: 3px 0; display: none;";
+    rerollButton.disabled = true;
     const updateRollButtonText = (diceType) => {
       rollButton.textContent = `Roll All Dice`;
     };
@@ -29939,23 +31216,69 @@ var D20DicePlugin = class extends import_obsidian2.Plugin {
     this.controlsPanel.style.left = "50px";
     this.controlsPanel.style.top = "100px";
     this.dice = new D20Dice(diceContainer, this.settings);
+    Object.entries(this.settings.diceCounts).forEach(([diceType, count]) => {
+      for (let i = 0; i < count; i++) {
+        this.dice.createSingleDice(diceType);
+      }
+    });
     this.dice.onCalibrationChanged = () => {
       this.saveSettings();
     };
     this.dice.onRollComplete = (result) => {
       this.showResult(result, resultElement);
+      this.handleRollComplete(result);
     };
+    let statusInterval = null;
+    const startStatusMonitoring = () => {
+      if (statusInterval)
+        return;
+      statusInterval = setInterval(() => {
+        if (this.dice) {
+          const status = this.dice.getDiceStatus();
+          this.updateDiceStatusDisplay(status, statusElement, rerollButton);
+        }
+      }, 500);
+    };
+    const stopStatusMonitoring = () => {
+      if (statusInterval) {
+        clearInterval(statusInterval);
+        statusInterval = null;
+      }
+    };
+    rerollButton.addEventListener("click", () => {
+      if (this.dice) {
+        const success = this.dice.rerollCaughtDice();
+        if (success) {
+          new import_obsidian3.Notice("Rerolling caught dice...");
+        } else {
+          new import_obsidian3.Notice("No caught dice to reroll");
+        }
+      }
+    });
     rollButton.addEventListener("click", async () => {
       rollButton.disabled = true;
       rollButton.textContent = "Rolling...";
       resultElement.textContent = "";
       resultElement.className = "dice-result-overlay";
+      statusElement.textContent = "Starting roll...";
+      startStatusMonitoring();
       try {
         const result = await this.dice.roll();
         this.showResult(result, resultElement);
+        this.handleRollComplete(result);
+        statusElement.textContent = "Roll complete!";
+        rerollButton.style.display = "none";
+        setTimeout(() => {
+          stopStatusMonitoring();
+          statusElement.textContent = "";
+        }, 3e3);
       } catch (error) {
         resultElement.textContent = "Error rolling dice";
         resultElement.className = "dice-result-overlay error";
+        statusElement.textContent = "Roll failed";
+        setTimeout(() => {
+          stopStatusMonitoring();
+        }, 3e3);
       } finally {
         rollButton.disabled = false;
         updateRollButtonText("d20");
@@ -30048,6 +31371,7 @@ var D20DicePlugin = class extends import_obsidian2.Plugin {
   hideDiceOverlay() {
     if (this.diceOverlay) {
       if (this.dice) {
+        this.dice.isViewActive = false;
         this.dice.clearAllDice();
         this.dice.destroy();
         this.dice = null;
@@ -30085,6 +31409,151 @@ var D20DicePlugin = class extends import_obsidian2.Plugin {
     if (this.isVisible && this.updateClickthroughCallback) {
       const newState = !this.clickthroughState;
       this.updateClickthroughCallback(newState);
+    }
+  }
+  refreshApiIntegration() {
+    if (this.chatRibbonIcon) {
+      this.chatRibbonIcon.remove();
+      this.chatRibbonIcon = null;
+    }
+    this.app.workspace.detachLeavesOfType(CHAT_VIEW_TYPE);
+    if (this.settings.apiEnabled) {
+      this.chatRibbonIcon = this.addRibbonIcon("messages-square", "Open Dice Chat", (evt) => {
+        this.openChatView();
+      });
+    }
+  }
+  async openChatView() {
+    const existing = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+    if (existing.length > 0) {
+      this.app.workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const leaf = this.app.workspace.getRightLeaf(false);
+    await (leaf == null ? void 0 : leaf.setViewState({
+      type: CHAT_VIEW_TYPE,
+      active: true
+    }));
+  }
+  // Method to handle dice requests from API when chat is not open
+  handleDiceRequest(expression, description) {
+    this.parseDiceExpression(expression);
+    if (!this.isVisible) {
+      this.showDiceOverlay();
+    }
+    new import_obsidian3.Notice(`Dice request received: ${expression} - ${description}`);
+  }
+  parseDiceExpression(expression) {
+    Object.keys(this.settings.diceCounts).forEach((key) => {
+      this.settings.diceCounts[key] = 0;
+    });
+    if (this.dice) {
+      this.dice.clearAllDice();
+    }
+    const diceMatches = expression.match(/(\d+)?d(\d+)/g);
+    if (diceMatches) {
+      diceMatches.forEach((match) => {
+        const diceMatch = match.match(/(\d+)?d(\d+)/);
+        if (diceMatch) {
+          const count = parseInt(diceMatch[1]) || 1;
+          const sides = diceMatch[2];
+          const diceType = `d${sides}`;
+          if (this.settings.diceCounts.hasOwnProperty(diceType)) {
+            this.settings.diceCounts[diceType] += count;
+            if (this.dice) {
+              for (let i = 0; i < count; i++) {
+                this.dice.createSingleDice(diceType);
+              }
+            }
+          }
+        }
+      });
+    }
+    this.saveSettings();
+    if (this.updateDiceCountDisplayCallback) {
+      this.updateDiceCountDisplayCallback();
+    }
+    this.refreshDiceView();
+  }
+  async handleRollComplete(result) {
+    if (!this.settings.apiEnabled) {
+      return;
+    }
+    try {
+      const chatViews = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+      if (chatViews.length > 0) {
+        const chatView = chatViews[0].view;
+        if (chatView && chatView.isConnected) {
+          let expression = "";
+          if (typeof result === "string") {
+            const match = result.match(/^(.+?)=/);
+            if (match) {
+              expression = match[1];
+            } else {
+              expression = result;
+            }
+          } else {
+            const diceParts = [];
+            Object.entries(this.settings.diceCounts).forEach(([diceType, count]) => {
+              if (count > 0) {
+                diceParts.push(count === 1 ? diceType : `${count}${diceType}`);
+              }
+            });
+            expression = diceParts.join(" + ") || "d20";
+          }
+          const diceRollResult = {
+            id: Date.now(),
+            expression,
+            raw_rolls: {},
+            modifiers: [],
+            total: typeof result === "number" ? result : parseInt(result.split("=").pop() || "0"),
+            is_critical: false,
+            is_fumble: false,
+            breakdown: typeof result === "string" ? result : `${expression}=${result}`
+          };
+          await chatView.apiClient.sendDiceResult(diceRollResult);
+          new import_obsidian3.Notice(`Roll shared in chat: ${diceRollResult.breakdown}`);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to submit roll to API:", error);
+      new import_obsidian3.Notice("Failed to share roll in chat");
+    }
+  }
+  updateDiceStatusDisplay(status, statusElement, rerollButton) {
+    if (status.length === 0) {
+      statusElement.textContent = "";
+      rerollButton.style.display = "none";
+      return;
+    }
+    const rolling = status.filter((d) => d.status === "rolling").length;
+    const caught = status.filter((d) => d.status === "caught").length;
+    const complete = status.filter((d) => d.status === "complete").length;
+    let displayText = "";
+    if (rolling > 0 || caught > 0 || complete > 0) {
+      const parts = [];
+      if (rolling > 0)
+        parts.push(`\u{1F3B2} ${rolling} rolling`);
+      if (caught > 0)
+        parts.push(`\u{1F945} ${caught} caught`);
+      if (complete > 0)
+        parts.push(`\u2705 ${complete} done`);
+      displayText = parts.join(", ");
+      const diceDetails = status.map((dice) => {
+        const icon = dice.status === "complete" ? "\u2705" : dice.status === "caught" ? "\u{1F945}" : dice.status === "rolling" ? "\u{1F3B2}" : "\u2753";
+        const result = dice.result ? `=${dice.result}` : "";
+        return `${icon} ${dice.type}${result}`;
+      }).join(" ");
+      displayText += `
+${diceDetails}`;
+    }
+    statusElement.textContent = displayText;
+    if (caught > 0) {
+      rerollButton.style.display = "block";
+      rerollButton.disabled = false;
+      rerollButton.textContent = `Reroll ${caught} Caught Dice`;
+    } else {
+      rerollButton.style.display = "none";
     }
   }
 };
