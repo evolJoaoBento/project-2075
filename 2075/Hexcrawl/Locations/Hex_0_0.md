@@ -1,0 +1,36 @@
+# Hex_0_0
+
+#hex
+[[Hex_0_1]]
+[[Hex_0_-1]]
+[[Hex_1_0]]
+[[Hex_-1_0]]
+[[Hex_1_1]]
+[[Hex_-1_1]]
+
+## Location
+- Coordinates: (0, 0)
+- Terrain: desert
+- Biome: temperate
+3d4(1+2+4) = 7
+## Description
+No description yet.
+
+## Notes
+
+1d20=15
+## Encounters
+
+
+## Locations
+
+1 = 5
+2 = 4
+3 = 3
+4 = 2
+5 = 1
+6 = 10
+7 = 9
+8 = 8
+9 = 7
+10 = 6

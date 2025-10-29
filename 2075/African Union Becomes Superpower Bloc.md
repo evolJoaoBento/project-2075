@@ -27,6 +27,6 @@ Country:
 
 **Key Affected Countries:** [[Nigeria]], [[Kenya]], [[South Africa]], [[Ethiopia]], [[Egypt]], [[Ghana]], [[Democratic Republic of Congo]], [[Morocco]], [[Rwanda]]
 
-**Global Impact:** The [[African Union]]'s transformation into a superpower bloc redefines global geopolitics, shifting the balance of power and introducing a new era of multipolarity. Africa's unified stance amplifies its voice in international forums, influences global policy-making, and fosters a more equitable global order. The AU's success serves as a model for regional integration and collective advancement.
+**Global Impact:** The [[African Union]]'s transformation into a superpower bloc redefines global geopolitics, shifting the balance of power and introducing a new era of multipolarity. Africa's unified stance amplifies its voice in international forums, influences global policy-making, and fosters a more equitable global order. The AU's success serves as a model for regional integration and collective advancement. [[Hex_0_0 1]]
 
  

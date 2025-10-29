@@ -1,0 +1,11 @@
+{
+  "dsix:toggle-dice-clickthrough": [
+    {
+      "modifiers": [
+        "Mod",
+        "Shift"
+      ],
+      "key": " "
+    }
+  ]
+}
