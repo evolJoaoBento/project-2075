@@ -229,3 +229,221 @@
     transform: none;
 }
 
+/* Dice Chat Modal Styles */
+.dice-chat-modal .modal {
+    min-height: 500px;
+}
+
+.dice-chat-modal .modal-content {
+    padding: 0;
+    height: 100%;
+}
+
+.dice-chat-header {
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.dice-chat-close {
+    color: var(--text-muted);
+    transition: color 0.2s ease;
+}
+
+.dice-chat-close:hover {
+    color: var(--text-normal);
+}
+
+.dice-chat-messages {
+    background: var(--background-primary);
+    border-radius: 5px;
+    font-size: 13px;
+}
+
+.dice-chat-message {
+    word-wrap: break-word;
+}
+
+.dice-request-message {
+    transition: background-color 0.2s ease;
+}
+
+.dice-request-message:hover {
+    background: var(--background-modifier-hover) !important;
+}
+
+.dice-result-message {
+    border-radius: 5px;
+}
+
+.message-header {
+    font-size: 12px;
+}
+
+.message-content {
+    line-height: 1.4;
+}
+
+.message-timestamp {
+    text-align: right;
+}
+
+.dice-chat-input-container input {
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 5px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+}
+
+.dice-chat-input-container input:focus {
+    border-color: var(--interactive-accent);
+    outline: none;
+}
+
+.dice-expression-display {
+    min-height: 20px;
+    line-height: 1.4;
+}
+
+.dice-selection-grid {
+    margin-bottom: 15px;
+}
+
+.dice-card {
+    background: var(--background-primary);
+    transition: background-color 0.2s ease;
+}
+
+.dice-card:hover {
+    background: var(--background-modifier-hover);
+}
+
+.dice-type-label {
+    font-weight: bold;
+    font-size: 12px;
+    color: var(--text-accent);
+    margin-bottom: 5px;
+}
+
+.dice-count-display {
+    color: var(--text-normal);
+}
+
+.dice-card button {
+    background: var(--interactive-normal);
+    color: var(--text-on-accent);
+    border: 1px solid var(--interactive-accent);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.dice-card button:hover {
+    background: var(--interactive-hover);
+    transform: scale(1.05);
+}
+
+.dice-card button:active {
+    transform: scale(0.95);
+}
+
+.dice-modifier input {
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 3px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    text-align: center;
+}
+
+.dice-modifier input:focus {
+    border-color: var(--interactive-accent);
+    outline: none;
+}
+
+.dice-actions button {
+    padding: 10px;
+    border-radius: 5px;
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+.dice-chat-modal .dice-roll-button {
+    background: var(--interactive-accent) !important;
+    color: white !important;
+    border-color: var(--interactive-accent) !important;
+}
+
+.dice-chat-modal .dice-roll-button:hover:not(:disabled) {
+    background: var(--interactive-accent-hover) !important;
+}
+
+.dice-chat-modal .dice-roll-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.dice-request-button {
+    background: var(--color-orange);
+    color: white;
+    border-color: var(--color-orange);
+}
+
+.dice-request-button:hover {
+    background: var(--color-orange);
+    opacity: 0.8;
+}
+
+.dice-clear-button {
+    background: var(--background-primary);
+    color: var(--text-normal);
+}
+
+.dice-clear-button:hover {
+    background: var(--background-modifier-hover);
+}
+
+.dice-chat-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+    .dice-chat-modal .modal {
+        width: 95vw;
+        height: 95vh;
+    }
+
+    .dice-chat-main {
+        flex-direction: column !important;
+    }
+
+    .dice-dice-section {
+        width: 100% !important;
+        margin-top: 15px;
+    }
+
+    .dice-selection-grid {
+        grid-template-columns: repeat(3, 1fr) !important;
+    }
+}
+
+/* Dark theme adjustments */
+.theme-dark .dice-request-message {
+    border-color: var(--interactive-accent) !important;
+}
+
+.theme-dark .dice-result-message {
+    border-left-color: var(--color-green) !important;
+}
+
+/* Light theme adjustments */
+.theme-light .dice-request-message {
+    border-color: var(--interactive-accent) !important;
+}
+
+.theme-light .dice-result-message {
+    border-left-color: var(--color-green) !important;
+}
+

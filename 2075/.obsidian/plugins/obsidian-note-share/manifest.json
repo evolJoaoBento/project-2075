@@ -1,0 +1,11 @@
+{
+	"id": "note-share",
+	"name": "Note Share",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Share notes with git-like diff and merge functionality. Select notes to share and receive them with visual diffs for easy merging.",
+	"author": "Note Share Plugin",
+	"authorUrl": "",
+	"fundingUrl": "",
+	"isDesktopOnly": false
+}

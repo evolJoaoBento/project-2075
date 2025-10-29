@@ -38,6 +38,19 @@ export default class D20DicePlugin extends Plugin {
             }
         });
 
+        this.addCommand({
+            id: 'debug-dice-info',
+            name: 'Debug: Log All Dice Information',
+            callback: () => {
+                if (this.dice) {
+                    this.dice.debugLogAllDiceInfo();
+                    new Notice('Dice debug info logged to console');
+                } else {
+                    new Notice('No dice roller active');
+                }
+            }
+        });
+
         this.addRibbonIcon('dice', 'Toggle D20 Dice Roller', (evt: MouseEvent) => {
             this.toggleDiceOverlay();
         });

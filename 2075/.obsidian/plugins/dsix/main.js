@@ -29659,6 +29659,90 @@ var D20Dice = class {
     this.originalMaterials.clear();
     console.log("\u{1F505} Cleared all dice highlights");
   }
+  // Debug method to log all dice information
+  debugLogAllDiceInfo() {
+    console.log("\n" + "=".repeat(80));
+    console.log("\u{1F50D} DEBUG: ALL DICE INFORMATION");
+    console.log("=".repeat(80));
+    console.log(`Total dice in scene: ${this.diceArray.length}`);
+    console.log(`Motion threshold: ${this.settings.motionThreshold}`);
+    console.log(`Face detection tolerance: ${this.settings.faceDetectionTolerance}`);
+    console.log(`Monitoring active: ${this.currentMonitor !== null}`);
+    console.log(`Dice states tracked: ${this.diceStates.length}`);
+    console.log("=".repeat(80));
+    for (let i = 0; i < this.diceArray.length; i++) {
+      const dice = this.diceArray[i];
+      const body = this.diceBodyArray[i];
+      const diceType = this.diceTypeArray[i];
+      const state = this.diceStates[i];
+      console.log(`
+\u{1F4E6} DICE ${i} (${diceType})`);
+      console.log("\u2500".repeat(40));
+      if (body) {
+        console.log(`Position: (${body.position.x.toFixed(3)}, ${body.position.y.toFixed(3)}, ${body.position.z.toFixed(3)})`);
+        const linearVel = body.velocity.length();
+        const angularVel = body.angularVelocity.length();
+        const totalMotion = linearVel + angularVel;
+        console.log(`Linear velocity: ${linearVel.toFixed(4)} (x:${body.velocity.x.toFixed(3)}, y:${body.velocity.y.toFixed(3)}, z:${body.velocity.z.toFixed(3)})`);
+        console.log(`Angular velocity: ${angularVel.toFixed(4)} (x:${body.angularVelocity.x.toFixed(3)}, y:${body.angularVelocity.y.toFixed(3)}, z:${body.angularVelocity.z.toFixed(3)})`);
+        console.log(`Total motion: ${totalMotion.toFixed(4)} ${totalMotion < this.settings.motionThreshold ? "\u2713 BELOW THRESHOLD" : "\u2717 ABOVE THRESHOLD"}`);
+      }
+      if (dice) {
+        const quat = dice.quaternion;
+        console.log(`Quaternion: (${quat.x.toFixed(3)}, ${quat.y.toFixed(3)}, ${quat.z.toFixed(3)}, ${quat.w.toFixed(3)})`);
+        const euler = new Euler().setFromQuaternion(quat);
+        console.log(`Euler angles (deg): X=${(euler.x * 180 / Math.PI).toFixed(1)}\xB0 Y=${(euler.y * 180 / Math.PI).toFixed(1)}\xB0 Z=${(euler.z * 180 / Math.PI).toFixed(1)}\xB0`);
+      }
+      const checkResult = this.checkDiceResult(i);
+      console.log(`
+\u{1F3AF} Face Detection:`);
+      console.log(`  Detection method: ${diceType === "d4" ? "DOWN face (0, -1, 0)" : "UP face (0, 1, 0)"}`);
+      console.log(`  Is CAUGHT: ${checkResult.isCaught ? "\u274C YES" : "\u2705 NO"}`);
+      console.log(`  Detected result: ${checkResult.result !== null ? checkResult.result : "NULL"}`);
+      console.log(`  Confidence: ${checkResult.confidence.toFixed(4)}`);
+      console.log(`  Required confidence: ${checkResult.requiredConfidence.toFixed(4)}`);
+      console.log(`  Confidence gap: ${(checkResult.confidence - checkResult.requiredConfidence).toFixed(4)} ${checkResult.confidence >= checkResult.requiredConfidence ? "\u2713 PASS" : "\u2717 FAIL"}`);
+      if (dice) {
+        console.log(`
+\u{1F52C} Detailed Face Analysis:`);
+        const faceNormals = this.getFaceNormalsForDiceType(diceType);
+        const detectionVector = diceType === "d4" ? new Vector3(0, -1, 0) : new Vector3(0, 1, 0);
+        console.log(`  Total faces: ${faceNormals.length}`);
+        const faceAlignments = [];
+        for (let f = 0; f < faceNormals.length; f++) {
+          const worldNormal = faceNormals[f].clone();
+          worldNormal.applyQuaternion(dice.quaternion);
+          const dotProduct = worldNormal.dot(detectionVector);
+          faceAlignments.push({ face: f + 1, dot: dotProduct, worldNormal });
+        }
+        faceAlignments.sort((a2, b2) => b2.dot - a2.dot);
+        console.log(`  Face alignments (sorted by confidence):`);
+        for (let f = 0; f < Math.min(5, faceAlignments.length); f++) {
+          const alignment = faceAlignments[f];
+          const isDetected = f === 0;
+          console.log(`    Face ${alignment.face}: ${alignment.dot.toFixed(4)} ${isDetected ? "\u2190 DETECTED" : ""}`);
+          console.log(`      World normal: (${alignment.worldNormal.x.toFixed(3)}, ${alignment.worldNormal.y.toFixed(3)}, ${alignment.worldNormal.z.toFixed(3)})`);
+        }
+      }
+      console.log(`
+\u{1F4CA} State Info:`);
+      if (state) {
+        console.log(`  Status: ${state.isComplete ? "\u2705 COMPLETE" : state.isCaught ? "\u{1F945} CAUGHT" : state.isRolling ? "\u{1F3B2} ROLLING" : "\u2753 UNKNOWN"}`);
+        console.log(`  Result: ${state.result !== null ? state.result : "null"}`);
+        console.log(`  Stable time: ${state.stableTime > 0 ? `${Date.now() - state.stableTime}ms ago` : "not stable"}`);
+        console.log(`  Last motion: ${Date.now() - state.lastMotion}ms ago`);
+      } else {
+        console.log(`  No state tracked (monitoring not active)`);
+      }
+      console.log(`
+\u{1F4A1} Highlight:`);
+      console.log(`  Is highlighted: ${this.originalMaterials.has(i) ? "\u2705 YES" : "\u274C NO"}`);
+      console.log("\u2500".repeat(40));
+    }
+    console.log("\n" + "=".repeat(80));
+    console.log("END DEBUG INFO");
+    console.log("=".repeat(80) + "\n");
+  }
 };
 
 // settings.ts
@@ -31042,6 +31126,18 @@ var D20DicePlugin = class extends import_obsidian3.Plugin {
       name: "Toggle Dice Clickthrough Mode",
       callback: () => {
         this.toggleClickthrough();
+      }
+    });
+    this.addCommand({
+      id: "debug-dice-info",
+      name: "Debug: Log All Dice Information",
+      callback: () => {
+        if (this.dice) {
+          this.dice.debugLogAllDiceInfo();
+          new import_obsidian3.Notice("Dice debug info logged to console");
+        } else {
+          new import_obsidian3.Notice("No dice roller active");
+        }
       }
     });
     this.addRibbonIcon("dice", "Toggle D20 Dice Roller", (evt) => {

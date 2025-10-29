@@ -93,11 +93,18 @@ export interface DiceSettings {
     // Face detection settings
     faceDetectionTolerance: number;
 
+    // Highlight settings
+    completedDiceHighlightColor: string;
+
     // Debug settings
     enableMotionDebug: boolean;
 
     // Face calibration mapping
     faceMapping: { [faceIndex: number]: number };
+
+    // API Integration settings
+    apiEnabled: boolean;
+    apiEndpoint: string;
 
 }
 
@@ -193,6 +200,9 @@ export const DEFAULT_SETTINGS: DiceSettings = {
     // Face detection defaults
     faceDetectionTolerance: 0.3,
 
+    // Highlight defaults
+    completedDiceHighlightColor: '#00ff00',
+
     // Debug defaults
     enableMotionDebug: false,
 
@@ -201,6 +211,10 @@ export const DEFAULT_SETTINGS: DiceSettings = {
         0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9, 9: 10,
         10: 11, 11: 12, 12: 13, 13: 14, 14: 15, 15: 16, 16: 17, 17: 18, 18: 19, 19: 20
     },
+
+    // API Integration defaults
+    apiEnabled: false,
+    apiEndpoint: 'http://localhost:5000'
 
 };
 
@@ -799,7 +813,7 @@ export class DiceSettingTab extends PluginSettingTab {
 
         new Setting(motionSection)
             .setName('Face detection tolerance')
-            .setDesc('How precisely the face must be pointing up (0.1 = very strict, 0.5 = relaxed). Lower values require face to be more perfectly aligned.')
+            .setDesc('How precisely a face must be aligned to be considered valid (0.05 = very strict, 0.5 = relaxed). Dice that don\'t meet this threshold are CAUGHT and highlighted for reroll.')
             .addSlider(slider => slider
                 .setLimits(0.05, 0.5, 0.05)
                 .setValue(this.plugin.settings.faceDetectionTolerance)
@@ -807,6 +821,45 @@ export class DiceSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     console.log('⚙️ Face detection tolerance changed from', this.plugin.settings.faceDetectionTolerance, 'to', value);
                     this.plugin.settings.faceDetectionTolerance = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.refreshDiceView();
+                }));
+
+        new Setting(motionSection)
+            .setName('Completed dice highlight color')
+            .setDesc('Color to highlight dice that have successfully settled with a valid result')
+            .addColorPicker(color => color
+                .setValue(this.plugin.settings.completedDiceHighlightColor)
+                .onChange(async (value) => {
+                    console.log('⚙️ Completed dice highlight color changed to', value);
+                    this.plugin.settings.completedDiceHighlightColor = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.refreshDiceView();
+                }));
+
+        // API Integration Section
+        const apiSection = this.createCollapsibleSection(containerEl, 'API Integration', 'api');
+
+        new Setting(apiSection)
+            .setName('Enable online dice system')
+            .setDesc('Enable integration with online dice roll API for multiplayer dice rolling')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.apiEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.apiEnabled = value;
+                    await this.plugin.saveSettings();
+                    // Trigger refresh to show/hide ribbon icon
+                    this.plugin.refreshApiIntegration();
+                }));
+
+        new Setting(apiSection)
+            .setName('API endpoint')
+            .setDesc('URL of the dice roll API server (e.g., http://localhost:5000 or https://your-server.com)')
+            .addText(text => text
+                .setPlaceholder('http://localhost:5000')
+                .setValue(this.plugin.settings.apiEndpoint)
+                .onChange(async (value) => {
+                    this.plugin.settings.apiEndpoint = value;
                     await this.plugin.saveSettings();
                 }));
 
