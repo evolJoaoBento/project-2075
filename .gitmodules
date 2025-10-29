@@ -4,3 +4,6 @@
 [submodule "2075/.obsidian/plugins/obsidian-hexcrawl-plugin"]
 	path = 2075/.obsidian/plugins/obsidian-hexcrawl-plugin
 	url = https://github.com/coddingtonbear/obsidian-local-rest-api.git
+[submodule "2075/.obsidian/plugins/dsix"]
+	path = 2075/.obsidian/plugins/dsix
+	url = https://github.com/evolJoaoBento/obsidian-physical-dice.git
