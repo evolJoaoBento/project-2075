@@ -1,0 +1,6 @@
+[submodule "2075/.obsidian/plugins/obsidian-hexcrawl"]
+	path = 2075/.obsidian/plugins/obsidian-hexcrawl
+	url = https://github.com/evolJoaoBento/hexmap-explorer.git
+[submodule "2075/.obsidian/plugins/obsidian-hexcrawl-plugin"]
+	path = 2075/.obsidian/plugins/obsidian-hexcrawl-plugin
+	url = https://github.com/coddingtonbear/obsidian-local-rest-api.git
